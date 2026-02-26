@@ -4,6 +4,7 @@ import { EpisodeSidebar } from "@/components/layout/episode-sidebar";
 import { VoiceBar } from "@/components/voice/voice-bar";
 import { StoryStream } from "@/components/stream/story-stream";
 import { PlaylistBar } from "@/components/playlist/playlist-bar";
+import { InfluenceMap } from "@/components/graph/influence-map";
 
 export default function Home() {
   return (
@@ -12,15 +13,7 @@ export default function Home() {
 
       <MainLayout
         sidebar={<EpisodeSidebar />}
-        graph={
-          <div className="h-full flex items-center justify-center">
-            <div className="text-center">
-              <div className="w-24 h-24 rounded-full bg-shelf ring-2 ring-amber ring-tube-glow mx-auto mb-4" />
-              <p className="text-cream font-editorial text-lg">Influence Map</p>
-              <p className="text-sleeve text-sm mt-1">D3 force graph renders here</p>
-            </div>
-          </div>
-        }
+        graph={<InfluenceMap />}
         stream={<StoryStream />}
       />
 
