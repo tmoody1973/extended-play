@@ -2,6 +2,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { MainLayout } from "@/components/layout/main-layout";
 import { EpisodeSidebar } from "@/components/layout/episode-sidebar";
 import { VoiceBar } from "@/components/voice/voice-bar";
+import { StoryStream } from "@/components/stream/story-stream";
 
 export default function Home() {
   return (
@@ -19,17 +20,7 @@ export default function Home() {
             </div>
           </div>
         }
-        stream={
-          <div className="p-4">
-            <h3 className="font-editorial text-cream text-lg mb-4">Story Stream</h3>
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="bg-shelf rounded-lg p-4 mb-3 shadow-vinyl animate-slide-up">
-                <p className="text-cream text-sm">Agent narration card {i}. Exploring the connection between Fela Kuti and Kokoroko through the lens of Afrobeat...</p>
-                <p className="text-sleeve text-xs mt-2 font-data">2 min ago</p>
-              </div>
-            ))}
-          </div>
-        }
+        stream={<StoryStream />}
       />
 
       {/* Playlist Bar placeholder */}
