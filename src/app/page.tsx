@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/layout/app-shell";
 import { MainLayout } from "@/components/layout/main-layout";
+import { EpisodeSidebar } from "@/components/layout/episode-sidebar";
 import { VoiceBar } from "@/components/voice/voice-bar";
 
 export default function Home() {
@@ -8,21 +9,7 @@ export default function Home() {
       <VoiceBar />
 
       <MainLayout
-        sidebar={
-          <div className="p-4">
-            <h3 className="font-editorial text-cream text-lg mb-4">Episode Playlist</h3>
-            {[1, 2, 3, 4, 5].map((i) => (
-              <div key={i} className="flex items-center gap-3 mb-3 p-2 rounded hover:bg-shelf transition-colors cursor-pointer">
-                <span className="text-shadow font-data text-xs w-5">{String(i).padStart(2, "0")}</span>
-                <div className="w-8 h-8 rounded bg-shelf flex-shrink-0" />
-                <div className="min-w-0">
-                  <p className="text-cream text-sm truncate">Track Title {i}</p>
-                  <p className="text-sleeve text-xs truncate">Artist Name</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        }
+        sidebar={<EpisodeSidebar />}
         graph={
           <div className="h-full flex items-center justify-center">
             <div className="text-center">
