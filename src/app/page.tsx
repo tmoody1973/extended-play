@@ -3,6 +3,7 @@ import { MainLayout } from "@/components/layout/main-layout";
 import { EpisodeSidebar } from "@/components/layout/episode-sidebar";
 import { VoiceBar } from "@/components/voice/voice-bar";
 import { StoryStream } from "@/components/stream/story-stream";
+import { PlaylistBar } from "@/components/playlist/playlist-bar";
 
 export default function Home() {
   return (
@@ -23,19 +24,14 @@ export default function Home() {
         stream={<StoryStream />}
       />
 
-      {/* Playlist Bar placeholder */}
-      <footer className="h-16 flex items-center px-4 border-t border-edge bg-wood flex-shrink-0">
-        <span className="text-cream text-sm font-editorial mr-4">&#9835; Playlist</span>
-        <div className="flex gap-2">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="w-10 h-10 rounded bg-shelf" />
-          ))}
-        </div>
-        <div className="ml-auto flex gap-2">
-          <button className="text-xs text-amber hover:text-cream transition-colors">+ Add</button>
-          <button className="text-xs text-amber hover:text-cream transition-colors">Export ▾</button>
-        </div>
-      </footer>
+      <PlaylistBar
+        title="My Crate"
+        tracks={[
+          { id: "1", title: "Zombie", artistName: "Fela Kuti" },
+          { id: "2", title: "Secret Agent", artistName: "Tony Allen" },
+          { id: "3", title: "Abusey Junction", artistName: "Kokoroko" },
+        ]}
+      />
     </AppShell>
   );
 }
