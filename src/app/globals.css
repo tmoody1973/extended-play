@@ -59,7 +59,9 @@
   --color-skip-red: #c45c5c;
   --color-edge: #4a4038;
 
-  /* Font tokens */
+  /* Font tokens — bridged from next/font CSS variables.
+     next/font injects --font-playfair-display, --font-inter, --font-jetbrains-mono
+     on <html>. These aliases register semantic names with Tailwind v4. */
   --font-editorial: var(--font-playfair-display);
   --font-body: var(--font-inter);
   --font-data: var(--font-jetbrains-mono);

@@ -14,9 +14,16 @@ export const colors = {
   edge: "#4a4038",
 } as const;
 
+// Community colors for graph node borders (distinct from amber accent)
 export const communityColors = [
-  "#d4a054", "#7ca5b8", "#7ab87c", "#c45c5c",
-  "#b08fd8", "#e0a870", "#6bb5b5", "#d4708a",
+  "#d4a054", // amber (default)
+  "#7ca5b8", // vinyl blue
+  "#7ab87c", // led green
+  "#c45c5c", // skip red
+  "#b08fd8", // lavender
+  "#e0a870", // gold
+  "#6bb5b5", // teal
+  "#d4708a", // rose
 ] as const;
 
 export const fonts = {
