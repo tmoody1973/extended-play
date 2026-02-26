@@ -1,15 +1,11 @@
 import { AppShell } from "@/components/layout/app-shell";
 import { MainLayout } from "@/components/layout/main-layout";
+import { VoiceBar } from "@/components/voice/voice-bar";
 
 export default function Home() {
   return (
     <AppShell>
-      {/* Voice Bar placeholder */}
-      <header className="h-14 flex items-center px-4 border-b border-edge bg-wood flex-shrink-0">
-        <div className="w-3 h-3 rounded-full bg-amber animate-vu-pulse mr-3" />
-        <span className="text-cream font-body text-sm">Talk to the show...</span>
-        <div className="ml-auto text-sleeve text-sm font-data">Episode ▾</div>
-      </header>
+      <VoiceBar />
 
       <MainLayout
         sidebar={
