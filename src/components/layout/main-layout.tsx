@@ -22,7 +22,7 @@ export function MainLayout({ sidebar, graph, stream }: MainLayoutProps) {
       </div>
 
       {/* Story Stream — fixed width on desktop, full width on mobile */}
-      <div className="w-full md:w-[400px] lg:w-[400px] flex-shrink-0 border-l border-edge overflow-y-auto">
+      <div className="w-full md:w-[400px] flex-shrink-0 md:border-l border-edge overflow-y-auto">
         {stream}
       </div>
     </div>
