@@ -22,7 +22,7 @@ export function StoryStream({ items = [] }: StoryStreamProps) {
   return (
     <ScrollArea className="h-full">
       <div className="p-4 space-y-3">
-        <h3 className="font-editorial text-cream text-base mb-2">Story Stream</h3>
+        <h3 className="label-uppercase text-[11px] text-sleeve mb-4">Story Stream</h3>
 
         {items.length === 0 && (
           <p className="text-shadow text-sm">

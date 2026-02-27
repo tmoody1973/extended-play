@@ -86,7 +86,7 @@ export function EpisodeBrowser({
     <div className="h-full flex flex-col p-3 bg-walnut">
       {/* Header */}
       <div className="flex items-center justify-between mb-3 px-1">
-        <h3 className="font-editorial text-cream text-sm">
+        <h3 className="label-uppercase text-[11px] text-sleeve">
           {browseLevel.level === "years" && "Episodes"}
           {browseLevel.level === "months" && `${browseLevel.year}`}
           {browseLevel.level === "tracks" && (episodeWithTracks?.title || "Loading...")}
@@ -94,11 +94,11 @@ export function EpisodeBrowser({
         {activeTimeRange && (
           <button
             onClick={() => onTimeRangeSelect(undefined)}
-            className="font-data text-[10px] text-amber/70 hover:text-amber
+            className="label-uppercase text-[9px] text-gold/70 hover:text-gold
                        transition-colors cursor-pointer px-1.5 py-0.5
-                       rounded border border-amber/20 hover:border-amber/40"
+                       rounded border border-gold/20 hover:border-gold/40"
           >
-            Clear Filter
+            Clear
           </button>
         )}
       </div>

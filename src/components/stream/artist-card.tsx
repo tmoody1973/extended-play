@@ -13,22 +13,22 @@ export function ArtistCard({ name, imageUrl, genres, bio, country, communityLabe
       <div className="flex items-start gap-3">
         {/* Artist photo */}
         <div
-          className="w-16 h-16 rounded-full bg-wood flex-shrink-0 ring-2 ring-amber ring-tube-glow bg-cover bg-center flex items-center justify-center"
+          className="w-16 h-16 rounded-full bg-wood flex-shrink-0 ring-2 ring-gold ring-tube-glow bg-cover bg-center flex items-center justify-center"
           style={imageUrl ? { backgroundImage: `url(${imageUrl})` } : undefined}
         >
           {!imageUrl && (
-            <span className="text-amber font-editorial text-lg">
+            <span className="text-gold font-editorial text-lg font-bold">
               {name.charAt(0)}
             </span>
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <h4 className="text-cream font-editorial text-lg">{name}</h4>
+          <h4 className="text-cream font-editorial text-lg font-bold tracking-tight">{name}</h4>
           {country && (
-            <p className="text-sleeve text-xs font-data">{country}</p>
+            <p className="label-uppercase text-[10px] text-sleeve">{country}</p>
           )}
           {communityLabel && (
-            <span className="inline-block text-xs bg-wood text-amber px-2 py-0.5 rounded mt-1">
+            <span className="inline-block text-[10px] label-uppercase bg-wood text-gold px-2 py-0.5 rounded mt-1">
               {communityLabel}
             </span>
           )}
@@ -37,14 +37,14 @@ export function ArtistCard({ name, imageUrl, genres, bio, country, communityLabe
       {genres && genres.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-3">
           {genres.slice(0, 5).map((g) => (
-            <span key={g} className="text-xs bg-wood text-sleeve px-2 py-0.5 rounded">
+            <span key={g} className="text-[11px] bg-wood text-sleeve px-2 py-0.5 rounded">
               {g}
             </span>
           ))}
         </div>
       )}
       {bio && (
-        <p className="text-sleeve text-sm mt-3 line-clamp-3">{bio}</p>
+        <p className="text-sleeve text-sm mt-3 line-clamp-3 leading-relaxed">{bio}</p>
       )}
     </div>
   );

@@ -17,7 +17,7 @@ function MonthHeatmapBar({
   maxEpisodes: number;
 }) {
   return (
-    <div className="flex gap-px flex-1 h-3 rounded-sm overflow-hidden" role="img" aria-hidden="true">
+    <div className="flex gap-px flex-1 h-2.5 rounded-sm overflow-hidden" role="img" aria-hidden="true">
       {months.map((m) => {
         const intensity = m.episodeCount / maxEpisodes;
         return (
@@ -27,8 +27,8 @@ function MonthHeatmapBar({
             style={{
               backgroundColor:
                 m.episodeCount > 0
-                  ? `rgba(212, 160, 84, ${0.15 + intensity * 0.85})`
-                  : "rgba(53, 47, 41, 0.5)",
+                  ? `rgba(220, 165, 74, ${0.15 + intensity * 0.85})`
+                  : "rgba(37, 32, 24, 0.5)",
             }}
           />
         );
@@ -49,8 +49,8 @@ export function YearOverview({
         <div key={y.year} className="group flex items-center gap-2">
           <button
             onClick={() => onTimeRangeSelect(y.startTimestamp, y.endTimestamp)}
-            className="shrink-0 w-10 text-right font-data text-xs text-sleeve
-                       hover:text-amber transition-colors cursor-pointer"
+            className="shrink-0 w-10 text-right font-data text-[10px] text-sleeve
+                       hover:text-gold transition-colors cursor-pointer"
             aria-label={`View ${y.year} era graph, ${y.episodeCount} episodes`}
             title={`Filter graph to ${y.year}`}
           >
@@ -64,7 +64,7 @@ export function YearOverview({
             aria-label={`Browse ${y.year}, ${y.episodeCount} episodes`}
           >
             <MonthHeatmapBar months={y.months} maxEpisodes={maxMonthEpisodes} />
-            <span className="shrink-0 font-data text-xs text-shadow tabular-nums w-5 text-right group-hover:text-cream transition-colors">
+            <span className="shrink-0 font-data text-[10px] text-shadow tabular-nums w-5 text-right group-hover:text-cream transition-colors">
               {y.episodeCount}
             </span>
           </button>

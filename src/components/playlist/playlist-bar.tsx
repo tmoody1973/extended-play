@@ -20,8 +20,8 @@ export function PlaylistBar({ title = "Playlist", tracks = [], onExport }: Playl
 
   return (
     <footer className="h-16 flex items-center px-4 border-t border-edge bg-wood flex-shrink-0 gap-3">
-      <span className="text-cream text-sm font-editorial flex-shrink-0">
-        &#9835; {title}
+      <span className="label-uppercase text-[10px] text-cream flex-shrink-0">
+        {title}
       </span>
 
       {/* Album art thumbnail strip */}
@@ -45,24 +45,24 @@ export function PlaylistBar({ title = "Playlist", tracks = [], onExport }: Playl
           </div>
         ))}
         {tracks.length === 0 && (
-          <p className="text-shadow text-xs self-center">No tracks yet</p>
+          <p className="text-shadow text-[11px] self-center">No tracks yet</p>
         )}
       </div>
 
       {/* Track count */}
       {tracks.length > 0 && (
-        <span className="text-sleeve text-xs font-data flex-shrink-0">
+        <span className="text-sleeve text-[10px] font-data flex-shrink-0">
           {tracks.length} tracks
         </span>
       )}
 
       {/* Actions */}
       <div className="flex gap-2 flex-shrink-0 relative">
-        <button className="text-xs text-amber hover:text-cream transition-colors">
+        <button className="label-uppercase text-[10px] text-gold hover:text-cream transition-colors">
           + Add
         </button>
         <button
-          className="text-xs text-amber hover:text-cream transition-colors"
+          className="label-uppercase text-[10px] text-gold hover:text-cream transition-colors"
           onClick={() => setShowExport(!showExport)}
         >
           Export &#9662;
@@ -76,7 +76,7 @@ export function PlaylistBar({ title = "Playlist", tracks = [], onExport }: Playl
                   onExport?.(p.toLowerCase().replace(/[.\s]/g, "_"));
                   setShowExport(false);
                 }}
-                className="w-full text-left text-sm text-cream hover:text-amber hover:bg-wood px-3 py-1.5 rounded transition-colors"
+                className="w-full text-left text-sm text-cream hover:text-gold hover:bg-wood px-3 py-1.5 rounded transition-colors"
               >
                 {p}
               </button>

@@ -36,25 +36,25 @@ function MonthCell({
         relative flex flex-col items-center justify-center
         aspect-square rounded-md transition-all text-center
         ${hasEpisodes ? "cursor-pointer hover:scale-105" : "cursor-default opacity-40"}
-        ${isSelected ? "ring-1 ring-amber" : ""}
+        ${isSelected ? "ring-1 ring-gold" : ""}
       `}
       style={{
         backgroundColor: hasEpisodes
-          ? `rgba(212, 160, 84, ${0.08 + intensity * 0.35})`
-          : "rgba(53, 47, 41, 0.3)",
+          ? `rgba(220, 165, 74, ${0.08 + intensity * 0.35})`
+          : "rgba(37, 32, 24, 0.3)",
         boxShadow: isSelected
-          ? "0 0 12px rgba(212, 160, 84, 0.4), 0 0 4px rgba(212, 160, 84, 0.6)"
+          ? "0 0 12px rgba(220, 165, 74, 0.4), 0 0 4px rgba(220, 165, 74, 0.6)"
           : hasEpisodes
-            ? `0 0 ${intensity * 8}px rgba(212, 160, 84, ${intensity * 0.3})`
+            ? `0 0 ${intensity * 8}px rgba(220, 165, 74, ${intensity * 0.3})`
             : "none",
       }}
       aria-label={`${month.label} ${year}, ${month.episodeCount} episodes`}
     >
-      <span className="font-data text-[10px] text-sleeve leading-none">
+      <span className="font-data text-[9px] text-sleeve leading-none uppercase">
         {month.label}
       </span>
       {hasEpisodes && (
-        <span className="font-data text-xs text-amber leading-none mt-0.5">
+        <span className="font-data text-[11px] text-gold leading-none mt-0.5">
           {month.episodeCount}
         </span>
       )}
@@ -85,15 +85,15 @@ export function MonthView({
                      transition-colors text-sm cursor-pointer"
         >
           <span className="text-xs">&larr;</span>
-          <span className="font-data">{yearData.year}</span>
+          <span className="font-editorial font-bold">{yearData.year}</span>
         </button>
         <button
           onClick={() => onTimeRangeSelect(yearData.startTimestamp, yearData.endTimestamp)}
-          className="font-data text-[10px] text-amber/70 hover:text-amber
+          className="label-uppercase text-[9px] text-gold/70 hover:text-gold
                      transition-colors cursor-pointer px-1.5 py-0.5
-                     rounded border border-amber/20 hover:border-amber/40"
+                     rounded border border-gold/20 hover:border-gold/40"
         >
-          View {yearData.year} Graph
+          View Era
         </button>
       </div>
 
@@ -118,8 +118,8 @@ export function MonthView({
       {/* Episode List for Selected Month */}
       {selectedMonthData && selectedMonthData.episodes.length > 0 && (
         <div className="flex flex-col gap-0.5">
-          <div className="font-data text-[10px] text-shadow uppercase tracking-wider px-1">
-            {selectedMonthData.label} {yearData.year} &middot; {selectedMonthData.episodeCount} episodes
+          <div className="label-uppercase text-[9px] text-shadow px-1">
+            {selectedMonthData.label} {yearData.year} &middot; {selectedMonthData.episodeCount} ep
           </div>
           <div className="flex flex-col">
             {selectedMonthData.episodes.map((ep) => (

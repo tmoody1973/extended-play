@@ -7,7 +7,7 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-inter);
+  --font-sans: var(--font-hanken-grotesk);
   --font-mono: var(--font-jetbrains-mono);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -46,64 +46,73 @@
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
 
-  /* Tokyo Record Bar — Custom color tokens */
-  --color-walnut: #1a1612;
-  --color-wood: #2a2420;
-  --color-shelf: #352f29;
-  --color-amber: #d4a054;
-  --color-vinyl-blue: #7ca5b8;
-  --color-cream: #e8ddd0;
-  --color-sleeve: #9a8e82;
-  --color-shadow: #6b6058;
-  --color-led-green: #7ab87c;
-  --color-skip-red: #c45c5c;
-  --color-edge: #4a4038;
+  /* ═══ Brownswood × NTS Color System ═══
+     Warm golds + deep darks. Inspired by Brownswood Recordings'
+     palette with the density and editorial clarity of NTS/Lot Radio. */
 
-  /* Font tokens — bridged from next/font CSS variables.
-     next/font injects --font-playfair-display, --font-inter, --font-jetbrains-mono
-     on <html>. These aliases register semantic names with Tailwind v4. */
-  --font-editorial: var(--font-playfair-display);
-  --font-body: var(--font-inter);
+  --color-walnut: #0D0B07;
+  --color-wood: #171310;
+  --color-shelf: #252018;
+  --color-gold: #DCA54A;
+  --color-gold-dim: #C4923F;
+  --color-vinyl-blue: #7CA5B8;
+  --color-cream: #FAF5E5;
+  --color-sleeve: #9D825D;
+  --color-shadow: #6B5D42;
+  --color-led-green: #7AB87C;
+  --color-skip-red: #C45C5C;
+  --color-edge: #2E2820;
+
+  /* Keep amber as alias for gold (used across components) */
+  --color-amber: #DCA54A;
+
+  /* ═══ Typography Tokens ═══
+     Syne: bold geometric display (NTS/Lot Radio energy)
+     Hanken Grotesk: clean modern body
+     JetBrains Mono: data/timestamps */
+
+  --font-editorial: var(--font-syne);
+  --font-body: var(--font-hanken-grotesk);
   --font-data: var(--font-jetbrains-mono);
 
-  /* Custom animations */
+  /* Animations */
   --animate-vu-pulse: vu-pulse 1.5s ease-in-out infinite;
   --animate-slide-up: slide-up 0.3s ease-out;
 }
 
 :root {
   --radius: 0.625rem;
-  --background: #1a1612;
-  --foreground: #e8ddd0;
-  --card: #352f29;
-  --card-foreground: #e8ddd0;
-  --popover: #352f29;
-  --popover-foreground: #e8ddd0;
-  --primary: #d4a054;
-  --primary-foreground: #1a1612;
-  --secondary: #7ca5b8;
-  --secondary-foreground: #e8ddd0;
-  --muted: #2a2420;
-  --muted-foreground: #9a8e82;
-  --accent: #2a2420;
-  --accent-foreground: #e8ddd0;
-  --destructive: #c45c5c;
-  --border: #4a4038;
-  --input: #4a4038;
-  --ring: #d4a054;
-  --chart-1: #d4a054;
-  --chart-2: #7ca5b8;
-  --chart-3: #7ab87c;
-  --chart-4: #c45c5c;
-  --chart-5: #b08fd8;
-  --sidebar: #1a1612;
-  --sidebar-foreground: #e8ddd0;
-  --sidebar-primary: #d4a054;
-  --sidebar-primary-foreground: #1a1612;
-  --sidebar-accent: #2a2420;
-  --sidebar-accent-foreground: #e8ddd0;
-  --sidebar-border: #4a4038;
-  --sidebar-ring: #d4a054;
+  --background: #0D0B07;
+  --foreground: #FAF5E5;
+  --card: #252018;
+  --card-foreground: #FAF5E5;
+  --popover: #252018;
+  --popover-foreground: #FAF5E5;
+  --primary: #DCA54A;
+  --primary-foreground: #0D0B07;
+  --secondary: #7CA5B8;
+  --secondary-foreground: #FAF5E5;
+  --muted: #171310;
+  --muted-foreground: #9D825D;
+  --accent: #171310;
+  --accent-foreground: #FAF5E5;
+  --destructive: #C45C5C;
+  --border: #2E2820;
+  --input: #2E2820;
+  --ring: #DCA54A;
+  --chart-1: #DCA54A;
+  --chart-2: #7CA5B8;
+  --chart-3: #7AB87C;
+  --chart-4: #C45C5C;
+  --chart-5: #B08FD8;
+  --sidebar: #0D0B07;
+  --sidebar-foreground: #FAF5E5;
+  --sidebar-primary: #DCA54A;
+  --sidebar-primary-foreground: #0D0B07;
+  --sidebar-accent: #171310;
+  --sidebar-accent-foreground: #FAF5E5;
+  --sidebar-border: #2E2820;
+  --sidebar-ring: #DCA54A;
 }
 
 @layer base {
@@ -115,20 +124,41 @@
   }
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-editorial);
+    font-weight: 700;
   }
 }
 
-/* Wood grain texture overlay */
+/* ═══ Utility Classes ═══ */
+
+/* Subtle grain texture overlay */
 .bg-wood-grain {
-  background-image: url("data:image/svg+xml,%3Csvg width='200' height='200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg width='200' height='200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.025'/%3E%3C/svg%3E");
 }
 
+/* Gold tube glow */
 .ring-tube-glow {
-  box-shadow: 0 0 12px rgba(212, 160, 84, 0.4), 0 0 4px rgba(212, 160, 84, 0.6);
+  box-shadow: 0 0 12px rgba(220, 165, 74, 0.35), 0 0 4px rgba(220, 165, 74, 0.5);
 }
 
+/* Deep vinyl shadow */
 .shadow-vinyl {
-  box-shadow: 0 4px 20px rgba(26, 22, 18, 0.6), 0 2px 8px rgba(212, 160, 84, 0.1);
+  box-shadow: 0 4px 24px rgba(13, 11, 7, 0.7), 0 2px 8px rgba(220, 165, 74, 0.08);
+}
+
+/* Editorial uppercase label — NTS/Lot Radio style */
+.label-uppercase {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-family: var(--font-editorial);
+  font-weight: 700;
+}
+
+/* Section heading — bold, tight */
+.heading-tight {
+  font-family: var(--font-editorial);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
 }
 
 @keyframes vu-pulse {
@@ -143,14 +173,14 @@
 
 /* Temporal Explorer — heatmap glow utilities */
 .heatmap-glow-low {
-  box-shadow: 0 0 4px rgba(212, 160, 84, 0.15);
+  box-shadow: 0 0 4px rgba(220, 165, 74, 0.15);
 }
 .heatmap-glow-mid {
-  box-shadow: 0 0 8px rgba(212, 160, 84, 0.3);
+  box-shadow: 0 0 8px rgba(220, 165, 74, 0.3);
 }
 .heatmap-glow-high {
-  box-shadow: 0 0 12px rgba(212, 160, 84, 0.5), 0 0 4px rgba(212, 160, 84, 0.3);
+  box-shadow: 0 0 12px rgba(220, 165, 74, 0.5), 0 0 4px rgba(220, 165, 74, 0.3);
 }
 .heatmap-glow-max {
-  box-shadow: 0 0 16px rgba(212, 160, 84, 0.6), 0 0 6px rgba(212, 160, 84, 0.4);
+  box-shadow: 0 0 16px rgba(220, 165, 74, 0.6), 0 0 6px rgba(220, 165, 74, 0.4);
 }

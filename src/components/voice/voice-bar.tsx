@@ -32,7 +32,7 @@ export function VoiceBar({
         className={cn(
           "w-9 h-9 rounded-full flex items-center justify-center transition-all flex-shrink-0",
           isRecording
-            ? "bg-amber text-walnut animate-vu-pulse"
+            ? "bg-gold text-walnut animate-vu-pulse"
             : "bg-shelf text-sleeve hover:text-cream hover:bg-edge"
         )}
         aria-label={isRecording ? "Stop recording" : "Start recording"}
@@ -50,7 +50,9 @@ export function VoiceBar({
       <div className="flex-1 min-w-0">
         {transcript ? (
           <p className="text-cream text-sm truncate">
-            <span className="text-sleeve">{transcript.role === "user" ? "You" : "Curator"}:</span>{" "}
+            <span className="label-uppercase text-[10px] text-sleeve mr-1.5">
+              {transcript.role === "user" ? "You" : "Curator"}
+            </span>
             {transcript.text}
           </p>
         ) : (
@@ -59,6 +61,11 @@ export function VoiceBar({
           </p>
         )}
       </div>
+
+      {/* Brand mark */}
+      <span className="label-uppercase text-[10px] text-sleeve hidden md:block">
+        Extended Play
+      </span>
     </header>
   );
 }

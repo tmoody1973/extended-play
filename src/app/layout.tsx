@@ -1,17 +1,17 @@
 import type { Metadata } from "next";
-import { Playfair_Display, Inter, JetBrains_Mono } from "next/font/google";
+import { Syne, Hanken_Grotesk, JetBrains_Mono } from "next/font/google";
 import { ConvexClientProvider } from "./ConvexClientProvider";
 import "./globals.css";
 
-const playfairDisplay = Playfair_Display({
+const syne = Syne({
   subsets: ["latin"],
-  variable: "--font-playfair-display",
+  variable: "--font-syne",
   display: "swap",
 });
 
-const inter = Inter({
+const hankenGrotesk = Hanken_Grotesk({
   subsets: ["latin"],
-  variable: "--font-inter",
+  variable: "--font-hanken-grotesk",
   display: "swap",
 });
 
@@ -35,7 +35,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${playfairDisplay.variable} ${inter.variable} ${jetbrainsMono.variable}`}
+      className={`${syne.variable} ${hankenGrotesk.variable} ${jetbrainsMono.variable}`}
     >
       <body>
         <ConvexClientProvider>{children}</ConvexClientProvider>
