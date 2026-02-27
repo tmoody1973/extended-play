@@ -132,17 +132,21 @@ export const searchReviews = action({
 
       for (const result of results) {
         const publication = detectPublication(result.url);
-        const excerpt =
-          result.highlights?.join(" ") ||
-          result.text?.substring(0, 500) ||
-          "";
+        const highlights = result.highlights?.join(" ") || "";
+        const rawText = result.text || "";
+        const cleanedText = cleanExtractedText(rawText);
+
+        // Use cleaned text if it's real article content, otherwise fall back to highlights
+        const useCleanedText = isArticleContent(cleanedText);
+        const fullText = useCleanedText ? cleanedText : (highlights || cleanedText);
+        const excerpt = highlights || cleanedText.substring(0, 500);
 
         const processed = {
           title: result.title,
           url: result.url,
           publication,
           excerpt,
-          fullText: result.text,
+          fullText,
           publishDate: result.publishedDate,
           score: result.score,
         };
@@ -156,7 +160,7 @@ export const searchReviews = action({
             title: result.title,
             url: result.url,
             excerpt,
-            fullText: result.text,
+            fullText,
             publishDate: result.publishedDate,
             artistNames: args.artistNames,
           });
@@ -272,6 +276,59 @@ export const searchReviewsTavily = action({
         results: [],
       };
     }
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  PUBLIC: Trigger corpus seeding for an artist (agent-callable)
+// ═══════════════════════════════════════════════════════════════
+
+export const triggerCorpusSeed = action({
+  args: {
+    artistName: v.string(),
+    useGeminiGrounding: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args): Promise<{
+    status: string;
+    message: string;
+    artistName?: string;
+  }> => {
+    // Look up artist by name
+    const artist = await ctx.runQuery(internal.enrichment.findArtistByNameFuzzy, {
+      name: args.artistName,
+    }) as { _id: any; name: string } | null;
+
+    if (!artist) {
+      return {
+        status: "not_found",
+        message: `No artist found matching "${args.artistName}"`,
+      };
+    }
+
+    // Trigger review corpus seeding (Exa + Tavily)
+    await ctx.runAction(internal.reviewSearch.seedCorpusForArtist, {
+      artistId: artist._id,
+    });
+
+    // Also trigger Gemini Grounding corpus seeding if requested (default: true)
+    const useGrounding = args.useGeminiGrounding !== false;
+    let groundingMessage = "";
+    if (useGrounding) {
+      try {
+        await ctx.runAction(internal.geminiGrounding.seedCorpusWithGrounding, {
+          artistId: artist._id,
+        });
+        groundingMessage = " + Gemini Grounding search";
+      } catch (e: any) {
+        groundingMessage = ` (Gemini Grounding skipped: ${e.message})`;
+      }
+    }
+
+    return {
+      status: "success",
+      message: `Corpus seeding triggered for ${artist.name}: Exa/Tavily review search${groundingMessage}. NER extraction queued for new sources.`,
+      artistName: artist.name,
+    };
   },
 });
 
@@ -399,11 +456,16 @@ export const searchReviewsInternal = internalAction({
       let savedCount = 0;
       for (const result of results) {
         const publication = detectPublication(result.url);
-        // Use highlights as the excerpt (influence-focused), full text for NER
         const highlights = result.highlights?.join(" ") || "";
+        const rawText = result.text || "";
+        const cleanedText = cleanExtractedText(rawText);
+
+        // Use cleaned text if real article, otherwise fall back to highlights
+        const useCleanedText = isArticleContent(cleanedText);
+        const fullText = useCleanedText ? cleanedText : (highlights || cleanedText);
         const excerpt = highlights.length > 50
           ? highlights
-          : result.text?.substring(0, 500) || "";
+          : cleanedText.substring(0, 500);
 
         if (excerpt.length > 50) {
           await ctx.runMutation(internal.reviewSearch.saveSearchResult, {
@@ -411,7 +473,7 @@ export const searchReviewsInternal = internalAction({
             title: result.title,
             url: result.url,
             excerpt,
-            fullText: result.text,
+            fullText,
             publishDate: result.publishedDate,
             artistNames: args.artistNames,
           });
@@ -508,13 +570,11 @@ export const saveSearchResult = internalMutation({
     artistNames: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    // Check for duplicate by URL
+    // Check for duplicate by exact URL match
     if (args.url) {
       const existing = await ctx.db
         .query("reviews")
-        .withSearchIndex("search_reviews", (q) =>
-          q.search("excerpt", args.url!)
-        )
+        .withIndex("by_url", (q) => q.eq("url", args.url!))
         .first();
       if (existing) return; // Already have this review
     }
@@ -583,4 +643,62 @@ function mapToPublicationType(detected: string): any {
     "the_vinyl_factory", "fact_mag", "dj_mag", "xlr8r", "other",
   ];
   return validTypes.includes(detected) ? detected : "other";
+}
+
+// Strip HTML boilerplate, nav chrome, SVG data, and other non-article content
+function cleanExtractedText(raw: string): string {
+  let text = raw;
+
+  // Remove SVG/XML data URLs and inline SVG
+  text = text.replace(/<svg[\s\S]*?<\/svg>/gi, "");
+  text = text.replace(/data:image\/svg\+xml[^)\s"]*/g, "");
+  text = text.replace(/%3Csvg[\s\S]*?%3C\/svg%3E/gi, "");
+
+  // Remove base64 encoded images
+  text = text.replace(/data:image\/[a-z]+;base64,[A-Za-z0-9+/=]+/gi, "");
+
+  // Remove HTML tags (Exa sometimes leaks raw HTML despite includeHtmlTags: false)
+  text = text.replace(/<[^>]+>/g, " ");
+
+  // Remove CSS-like content blocks
+  text = text.replace(/\{[^}]*(?:color|font|margin|padding|display|background)[^}]*\}/gi, "");
+
+  // Remove common boilerplate patterns
+  text = text.replace(/\[!(X|Facebook|Twitter|Instagram|YouTube).*?\]/g, "");
+  text = text.replace(/\[!\[.*?\]\(.*?\)\]/g, ""); // markdown image links
+  text = text.replace(/!\[.*?\]\([^)]{100,}\)/g, ""); // markdown images with long URLs
+  text = text.replace(/\[(?:SUBSCRIBE|MAILING LIST|BOOK OUR STUDIO|Support Today|Cookie Notice|Privacy Policy|Terms of service|Sign Up|Newsletter|Follow Us)\]/gi, "");
+  text = text.replace(/\[Design and build by.*?\]/gi, "");
+
+  // Remove nav-like repeated bracket links (e.g. [Read] [Cover Stories] [Album Reviews])
+  text = text.replace(/(\[[\w\s]+\]\s*\n?\s*-?\s*){4,}/g, "");
+
+  // Remove lines that are just URLs or markdown link syntax
+  text = text.replace(/^https?:\/\/\S+$/gm, "");
+  text = text.replace(/^\[.*?\]\s*$/gm, "");
+
+  // Remove URL-encoded noise (common in Exa extractions)
+  text = text.replace(/%[0-9A-F]{2}(?:%[0-9A-F]{2}){10,}/gi, "");
+
+  // Collapse excessive whitespace
+  text = text.replace(/\n{3,}/g, "\n\n");
+  text = text.replace(/[ \t]{3,}/g, " ");
+  text = text.trim();
+
+  return text;
+}
+
+// Check if text looks like article content vs boilerplate
+function isArticleContent(text: string): boolean {
+  if (text.length < 100) return false;
+
+  // Count sentences (rough heuristic: period followed by space+capital or end)
+  const sentences = text.match(/[.!?]\s+[A-Z]/g)?.length || 0;
+  // Count boilerplate signals
+  const boilerplate = (text.match(/\[.*?\]/g)?.length || 0)
+    + (text.match(/svg|xmlns|viewBox|data:image/gi)?.length || 0)
+    + (text.match(/cookie|privacy|subscribe|newsletter|sign.?up/gi)?.length || 0);
+
+  // Good article has many sentences, few boilerplate markers
+  return sentences >= 3 && boilerplate < sentences;
 }

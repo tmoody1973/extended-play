@@ -7,6 +7,28 @@ import { v } from "convex/values";
 import { internalAction, action } from "./_generated/server";
 import { internal } from "./_generated/api";
 
+// ── Shared Vertex AI client factory ──
+function getVertexModel(modelName = "gemini-2.5-flash") {
+  const { VertexAI } = require("@google-cloud/vertexai");
+
+  const project = process.env.GOOGLE_CLOUD_PROJECT || "extended-play-488702";
+  const location = "us-central1";
+
+  // Parse service account key from env for Convex serverless runtime
+  const saKey = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+  const authOptions = saKey
+    ? { credentials: JSON.parse(saKey) }
+    : undefined;
+
+  const vertexAI = new VertexAI({
+    project,
+    location,
+    googleAuthOptions: authOptions,
+  });
+
+  return vertexAI.getGenerativeModel({ model: modelName });
+}
+
 // Layer 2b: Gemini Grounding — Fill metadata gaps via Google Search
 export const enrichArtistWithGrounding = internalAction({
   args: { artistId: v.id("artists") },
@@ -17,12 +39,7 @@ export const enrichArtistWithGrounding = internalAction({
     // Only ground if missing key metadata
     if (artist.bio && artist.genres && artist.genres.length > 0) return;
 
-    const { VertexAI } = require("@google-cloud/vertexai");
-    const vertexAI = new VertexAI({
-      project: process.env.GOOGLE_CLOUD_PROJECT || "extended-play-488702",
-      location: "us-central1",
-    });
-    const model = vertexAI.getGenerativeModel({ model: "gemini-3.0-pro" });
+    const model = getVertexModel();
 
     const response = await model.generateContent({
       contents: [
@@ -30,30 +47,19 @@ export const enrichArtistWithGrounding = internalAction({
           role: "user",
           parts: [
             {
-              text: `Research the musician/band "${artist.name}" and extract structured metadata. If this is an obscure or unknown artist, provide your best assessment based on available information. Return valid JSON only.`,
+              text: `Research the musician/band "${artist.name}" and extract structured metadata. If this is an obscure or unknown artist, provide your best assessment based on available information.
+
+Return your answer as JSON (no markdown fences) with this shape:
+{"bio": "...", "genres": ["..."], "relatedArtists": ["..."], "country": "XX", "activeYearBegin": 2000, "activeYearEnd": null}`,
             },
           ],
         },
       ],
-      tools: [{ googleSearchRetrieval: {} }],
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: "OBJECT",
-          properties: {
-            bio: { type: "STRING" },
-            genres: { type: "ARRAY", items: { type: "STRING" } },
-            relatedArtists: { type: "ARRAY", items: { type: "STRING" } },
-            country: { type: "STRING" },
-            activeYearBegin: { type: "INTEGER" },
-            activeYearEnd: { type: "INTEGER" },
-          },
-        },
-      },
+      tools: [{ googleSearch: {} }],
     });
 
-    const text = response.response.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) {
+    const rawText = response.response.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) {
       await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
         artistId,
         updates: {},
@@ -67,7 +73,8 @@ export const enrichArtistWithGrounding = internalAction({
       return;
     }
 
-    const metadata = JSON.parse(text);
+    const jsonStr = rawText.replace(/^```json\n?/, "").replace(/\n?```$/, "").trim();
+    const metadata = JSON.parse(jsonStr);
 
     // Merge: only fill gaps, don't overwrite existing data
     const updates: Record<string, any> = {};
@@ -110,12 +117,7 @@ export const seedCorpusWithGrounding = internalAction({
     if (!artist) return;
 
     try {
-      const { VertexAI } = require("@google-cloud/vertexai");
-      const vertexAI = new VertexAI({
-        project: process.env.GOOGLE_CLOUD_PROJECT || "extended-play-488702",
-        location: "us-central1",
-      });
-      const model = vertexAI.getGenerativeModel({ model: "gemini-3.0-pro" });
+      const model = getVertexModel();
 
       const response = await model.generateContent({
         contents: [
@@ -123,36 +125,19 @@ export const seedCorpusWithGrounding = internalAction({
             role: "user",
             parts: [
               {
-                text: `Find interviews, features, and profiles discussing the musical influences, collaborations, and artistic connections of ${artist.name}. Include specific artist names mentioned as influences. Return JSON with: sources (array of {title, url, excerpt}), relatedArtists (array of artist name strings found in sources).`,
+                text: `Find interviews, features, and profiles discussing the musical influences, collaborations, and artistic connections of ${artist.name}. Include specific artist names mentioned as influences.
+
+Return your answer as JSON (no markdown fences) with this shape:
+{"sources": [{"title": "...", "url": "...", "excerpt": "..."}], "relatedArtists": ["Artist Name 1", "Artist Name 2"]}`,
               },
             ],
           },
         ],
-        tools: [{ google_search: {} }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: "OBJECT",
-            properties: {
-              sources: {
-                type: "ARRAY",
-                items: {
-                  type: "OBJECT",
-                  properties: {
-                    title: { type: "STRING" },
-                    url: { type: "STRING" },
-                    excerpt: { type: "STRING" },
-                  },
-                },
-              },
-              relatedArtists: { type: "ARRAY", items: { type: "STRING" } },
-            },
-          },
-        },
+        tools: [{ googleSearch: {} }],
       });
 
-      const text = response.response.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) {
+      const rawText = response.response.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!rawText) {
         await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
           artistId,
           updates: {},
@@ -166,7 +151,15 @@ export const seedCorpusWithGrounding = internalAction({
         return;
       }
 
-      const result = JSON.parse(text);
+      // Parse JSON from response — strip markdown fences if present
+      const jsonStr = rawText.replace(/^```json\n?/, "").replace(/\n?```$/, "").trim();
+      let result: { sources?: any[]; relatedArtists?: string[] };
+      try {
+        result = JSON.parse(jsonStr);
+      } catch {
+        // If JSON parse fails, still extract grounding metadata below
+        result = { sources: [], relatedArtists: [] };
+      }
       const sources = result.sources || [];
       const relatedArtists = result.relatedArtists || [];
 

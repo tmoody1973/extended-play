@@ -403,6 +403,7 @@ export default defineSchema({
     .index("by_publication", ["publication"])
     .index("by_primaryArtist", ["primaryArtistId"])
     .index("by_nerProcessed", ["nerProcessed"])
+    .index("by_url", ["url"])
     .searchIndex("search_reviews", {
       searchField: "excerpt",
       filterFields: ["publication", "nerProcessed"],
