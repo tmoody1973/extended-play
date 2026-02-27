@@ -77,6 +77,7 @@ export function InfluenceMap({ onNodeClick, highlightedNodeId }: InfluenceMapPro
     width: dimensions.width,
     height: dimensions.height,
     onNodeClick,
+    highlightedNodeId,
   });
 
   return (

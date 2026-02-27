@@ -28,11 +28,13 @@ interface UseForceGraphOptions {
   width: number;
   height: number;
   onNodeClick?: (nodeId: string) => void;
+  highlightedNodeId?: string;
 }
 
-export function useForceGraph({ nodes, edges, width, height, onNodeClick }: UseForceGraphOptions) {
+export function useForceGraph({ nodes, edges, width, height, onNodeClick, highlightedNodeId }: UseForceGraphOptions) {
   const svgRef = useRef<SVGSVGElement>(null);
   const simulationRef = useRef<d3.Simulation<GraphNode, GraphEdge> | null>(null);
+  const prevHighlightRef = useRef<string | undefined>(undefined);
 
   const render = useCallback(() => {
     if (!svgRef.current || nodes.length === 0) return;
@@ -141,6 +143,40 @@ export function useForceGraph({ nodes, edges, width, height, onNodeClick }: UseF
     const cleanup = render();
     return () => cleanup?.();
   }, [render]);
+
+  // Highlight effect — responds to highlightedNodeId changes without re-rendering the graph
+  useEffect(() => {
+    if (!svgRef.current) return;
+
+    const svg = d3.select(svgRef.current);
+    const prev = prevHighlightRef.current;
+
+    // Reset previously highlighted node
+    if (prev) {
+      svg.selectAll<SVGGElement, GraphNode>("g g g")
+        .filter((d) => d.id === prev)
+        .select("circle")
+        .transition()
+        .duration(300)
+        .attr("r", 20)
+        .attr("stroke", colors.amber)
+        .attr("stroke-width", 2);
+    }
+
+    // Apply highlight to new node
+    if (highlightedNodeId) {
+      svg.selectAll<SVGGElement, GraphNode>("g g g")
+        .filter((d) => d.id === highlightedNodeId)
+        .select("circle")
+        .transition()
+        .duration(300)
+        .attr("r", 26)
+        .attr("stroke", colors.cream)
+        .attr("stroke-width", 4);
+    }
+
+    prevHighlightRef.current = highlightedNodeId;
+  }, [highlightedNodeId]);
 
   return svgRef;
 }
