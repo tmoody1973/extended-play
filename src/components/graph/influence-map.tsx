@@ -7,6 +7,7 @@ import { useForceGraph, GraphNode, GraphEdge } from "./use-force-graph";
 
 interface InfluenceMapProps {
   onNodeClick?: (artistId: string) => void;
+  highlightedNodeId?: string;
 }
 
 // Demo data for when Convex has no graph snapshot yet
@@ -33,7 +34,7 @@ const demoEdges: GraphEdge[] = [
   { source: "3", target: "7", weight: 1 },
 ];
 
-export function InfluenceMap({ onNodeClick }: InfluenceMapProps) {
+export function InfluenceMap({ onNodeClick, highlightedNodeId }: InfluenceMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
 

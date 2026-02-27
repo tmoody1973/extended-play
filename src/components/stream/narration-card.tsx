@@ -1,6 +1,7 @@
 interface NarrationCardProps {
   content: string;
   timestamp?: string;
+  style?: string;
 }
 
 export function NarrationCard({ content, timestamp }: NarrationCardProps) {

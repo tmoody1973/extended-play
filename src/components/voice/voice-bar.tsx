@@ -1,21 +1,34 @@
 "use client";
 
-import { useState } from "react";
 import { cn } from "@/lib/utils";
 
 interface VoiceBarProps {
-  onEpisodeSelect?: (episodeId: string) => void;
+  isConnected: boolean;
+  isRecording: boolean;
+  transcript: { role: string; text: string } | null;
+  onToggleRecording: () => void;
 }
 
-export function VoiceBar({ onEpisodeSelect }: VoiceBarProps) {
-  const [isRecording, setIsRecording] = useState(false);
-  const [transcript, setTranscript] = useState("");
-
+export function VoiceBar({
+  isConnected,
+  isRecording,
+  transcript,
+  onToggleRecording,
+}: VoiceBarProps) {
   return (
     <header className="h-14 flex items-center px-4 border-b border-edge bg-wood flex-shrink-0 gap-3">
+      {/* Connection indicator */}
+      <div
+        className={cn(
+          "w-2 h-2 rounded-full flex-shrink-0",
+          isConnected ? "bg-led-green" : "bg-skip-red"
+        )}
+        title={isConnected ? "Connected" : "Disconnected"}
+      />
+
       {/* Mic button */}
       <button
-        onClick={() => setIsRecording(!isRecording)}
+        onClick={onToggleRecording}
         className={cn(
           "w-9 h-9 rounded-full flex items-center justify-center transition-all flex-shrink-0",
           isRecording
@@ -24,12 +37,7 @@ export function VoiceBar({ onEpisodeSelect }: VoiceBarProps) {
         )}
         aria-label={isRecording ? "Stop recording" : "Start recording"}
       >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 16 16"
-          fill="currentColor"
-        >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
           {isRecording ? (
             <rect x="4" y="4" width="8" height="8" rx="1" />
           ) : (
@@ -38,21 +46,19 @@ export function VoiceBar({ onEpisodeSelect }: VoiceBarProps) {
         </svg>
       </button>
 
-      {/* Transcription / prompt area */}
+      {/* Transcription area */}
       <div className="flex-1 min-w-0">
         {transcript ? (
-          <p className="text-cream text-sm truncate">{transcript}</p>
+          <p className="text-cream text-sm truncate">
+            <span className="text-sleeve">{transcript.role === "user" ? "You" : "Curator"}:</span>{" "}
+            {transcript.text}
+          </p>
         ) : (
           <p className="text-shadow text-sm">
-            {isRecording ? "Listening..." : "Talk to the show..."}
+            {isRecording ? "Listening..." : "Talk to the curator..."}
           </p>
         )}
       </div>
-
-      {/* Episode selector */}
-      <button className="text-sleeve text-sm font-data hover:text-cream transition-colors flex-shrink-0">
-        Episode ▾
-      </button>
     </header>
   );
 }

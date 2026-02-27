@@ -1,71 +1,77 @@
 "use client";
 
+import { useRef, useEffect } from "react";
 import { NarrationCard } from "./narration-card";
 import { ArtistCard } from "./artist-card";
 import { AlbumArtCard } from "./album-art-card";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import type { AgentEvent } from "@/hooks/use-agent-connection";
 
-// Temporary demo data — will be replaced with Convex queries
-const demoItems = [
-  {
-    type: "narration" as const,
-    content: "Let's explore the connection between Fela Kuti and Kokoroko. Kokoroko sits at a fascinating intersection — West African highlife tradition filtered through the London jazz scene.",
-    timestamp: "Just now",
-  },
-  {
-    type: "artist" as const,
-    name: "Kokoroko",
-    genres: ["Afrobeat", "UK Jazz", "Highlife"],
-    country: "UK",
-    communityLabel: "London Jazz Scene",
-  },
-  {
-    type: "narration" as const,
-    content: "Their horn arrangements directly reference Tony Allen's work with Fela. There's a straight line from Lagos in the '70s to Deptford in 2019.",
-    timestamp: "1 min ago",
-  },
-  {
-    type: "album" as const,
-    title: "Zombie",
-    artistName: "Fela Kuti",
-    albumTitle: "Zombie",
-    year: 1977,
-  },
-];
+interface StoryStreamProps {
+  items?: AgentEvent[];
+}
 
-export function StoryStream() {
+export function StoryStream({ items = [] }: StoryStreamProps) {
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom when new items arrive
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [items.length]);
+
   return (
     <ScrollArea className="h-full">
       <div className="p-4 space-y-3">
         <h3 className="font-editorial text-cream text-base mb-2">Story Stream</h3>
-        {demoItems.map((item, i) => {
+
+        {items.length === 0 && (
+          <p className="text-shadow text-sm">
+            Start a conversation to explore music connections...
+          </p>
+        )}
+
+        {items.map((item, i) => {
           switch (item.type) {
-            case "narration":
-              return <NarrationCard key={i} content={item.content} timestamp={item.timestamp} />;
-            case "artist":
+            case "show_narration":
+              return (
+                <NarrationCard
+                  key={i}
+                  content={item.text as string}
+                  timestamp="Just now"
+                  style={item.style as string | undefined}
+                />
+              );
+            case "show_artist": {
+              const data = item.data as Record<string, unknown> | undefined;
               return (
                 <ArtistCard
                   key={i}
-                  name={item.name}
-                  genres={item.genres}
-                  country={item.country}
-                  communityLabel={item.communityLabel}
+                  name={(data?.name as string) || "Unknown"}
+                  genres={(data?.genres as string[]) || []}
+                  country={(data?.country as string) || ""}
+                  communityLabel={(data?.communityLabel as string) || ""}
+                  imageUrl={(data?.images as any)?.thumbnail?.url}
+                  bio={(data?.bio as string) || ""}
                 />
               );
-            case "album":
-              return (
-                <AlbumArtCard
-                  key={i}
-                  title={item.title}
-                  artistName={item.artistName}
-                  albumTitle={item.albumTitle}
-                  year={item.year}
-                />
-              );
+            }
+            case "transcript":
+              if (item.role === "agent") {
+                return (
+                  <NarrationCard
+                    key={i}
+                    content={item.text as string}
+                    timestamp="Just now"
+                  />
+                );
+              }
+              return null;
             default:
               return null;
           }
         })}
+
+        <div ref={bottomRef} />
       </div>
     </ScrollArea>
   );
