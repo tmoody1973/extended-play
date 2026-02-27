@@ -713,3 +713,94 @@ export const forceReenrichArtist = mutation({
     return { queued: steps.length, artistName: artist.name };
   },
 });
+
+// ═══════════════════════════════════════════════════════════════
+//  GRAPH SNAPSHOT BUILDER
+//  Collects all artists + connections → serialized JSON for D3
+// ═══════════════════════════════════════════════════════════════
+
+export const buildGraphSnapshot = mutation({
+  args: {
+    label: v.optional(v.string()),
+  },
+  handler: async (ctx, { label }) => {
+    const now = Date.now();
+
+    // Collect all artists with at least one connection
+    const allArtists = await ctx.db.query("artists").collect();
+    const allConnections = await ctx.db.query("artistConnections").collect();
+
+    // Build set of artist IDs that have connections
+    const connectedIds = new Set<string>();
+    for (const conn of allConnections) {
+      connectedIds.add(conn.sourceArtistId.toString());
+      connectedIds.add(conn.targetArtistId.toString());
+    }
+
+    // Filter to connected artists only
+    const artists = allArtists.filter((a) => connectedIds.has(a._id.toString()));
+
+    // Build nodes
+    const nodes = artists.map((a, i) => ({
+      id: a._id,
+      name: a.name,
+      community: a.communityId ?? 0,
+      communityLabel: a.communityLabel,
+      size: Math.max(3, (a.bridgeScore ?? 0) * 10 + 3),
+      imageUrl: a.images?.thumbnail?.url || a.images?.primary?.url,
+      genres: a.genres?.slice(0, 3),
+      country: a.country,
+      enrichmentStatus: a.enrichmentStatus,
+      // Initial positions in a circle
+      x: 400 + 300 * Math.cos((2 * Math.PI * i) / artists.length),
+      y: 300 + 200 * Math.sin((2 * Math.PI * i) / artists.length),
+    }));
+
+    // Build edges
+    const edges = allConnections.map((c) => ({
+      source: c.sourceArtistId,
+      target: c.targetArtistId,
+      weight: c.weight,
+      types: c.connectionTypes,
+    }));
+
+    // Deactivate any existing active snapshot
+    const activeSnapshot = await ctx.db
+      .query("graphSnapshots")
+      .withIndex("by_active", (q) => q.eq("isActive", true))
+      .first();
+
+    if (activeSnapshot) {
+      await ctx.db.patch(activeSnapshot._id, { isActive: false });
+    }
+
+    // Get next version number
+    const latestSnapshot = await ctx.db
+      .query("graphSnapshots")
+      .withIndex("by_version")
+      .order("desc")
+      .first();
+    const version = (latestSnapshot?.version ?? 0) + 1;
+
+    // Create new snapshot
+    const snapshotId = await ctx.db.insert("graphSnapshots", {
+      version,
+      label: label ?? `v${version}-auto`,
+      nodeCount: nodes.length,
+      edgeCount: edges.length,
+      communityCount: 0,
+      nodesJson: JSON.stringify(nodes),
+      edgesJson: JSON.stringify(edges),
+      communitiesJson: JSON.stringify([]),
+      isActive: true,
+      createdAt: now,
+    });
+
+    return {
+      snapshotId,
+      version,
+      nodeCount: nodes.length,
+      edgeCount: edges.length,
+    };
+  },
+});
