@@ -132,7 +132,7 @@ export const enrichArtistDiscogs = internalAction({
       const searchResp = await fetch(searchUrl, {
         headers: {
           "User-Agent": "RhythmLabExtended/1.0",
-          Authorization: `Discogs token=${process.env.DISCOGS_TOKEN}`,
+          Authorization: `Discogs key=${process.env.DISCOGS_KEY}, secret=${process.env.DISCOGS_SECRET}`,
         },
       });
 
@@ -162,7 +162,7 @@ export const enrichArtistDiscogs = internalAction({
         {
           headers: {
             "User-Agent": "RhythmLabExtended/1.0",
-            Authorization: `Discogs token=${process.env.DISCOGS_TOKEN}`,
+            Authorization: `Discogs key=${process.env.DISCOGS_KEY}, secret=${process.env.DISCOGS_SECRET}`,
           },
         }
       );
