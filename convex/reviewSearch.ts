@@ -4,7 +4,7 @@
 // Results are saved to the reviews table — corpus grows through conversation
 
 import { v } from "convex/values";
-import { action, internalMutation } from "./_generated/server";
+import { action, internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 
 // ═══════════════════════════════════════════════════════════════
@@ -107,12 +107,13 @@ export const searchReviews = action({
           includeDomains: domains,
           contents: {
             text: {
-              maxCharacters: 2000, // Get substantial excerpt
+              maxCharacters: 5000,
               includeHtmlTags: false,
             },
             highlights: {
-              numSentences: 3, // Key sentences
-              highlightsPerUrl: 2,
+              query: "artist influences, collaborations, musical connections, and related musicians",
+              numSentences: 5,
+              highlightsPerUrl: 3,
             },
           },
         }),
@@ -212,7 +213,8 @@ export const searchReviewsTavily = action({
           search_depth: "advanced",
           include_domains: ALL_DOMAINS,
           max_results: maxResults,
-          include_raw_content: false,
+          include_raw_content: "markdown",
+          chunks_per_source: 3,
         }),
       });
 
@@ -227,6 +229,7 @@ export const searchReviewsTavily = action({
 
       for (const result of results) {
         const publication = detectPublication(result.url);
+        const rawContent = result.raw_content || "";
         const excerpt = result.content || "";
 
         processedResults.push({
@@ -234,15 +237,20 @@ export const searchReviewsTavily = action({
           url: result.url,
           publication,
           excerpt,
+          fullText: rawContent.length > excerpt.length ? rawContent.substring(0, 5000) : undefined,
           score: result.score,
         });
 
         if (saveToCorpus && excerpt.length > 50) {
+          const fullText = rawContent.length > excerpt.length
+            ? rawContent.substring(0, 5000)
+            : undefined;
           await ctx.runMutation(internal.reviewSearch.saveSearchResult, {
             publication,
             title: result.title,
             url: result.url,
             excerpt,
+            fullText,
             publishDate: undefined,
             artistNames: args.artistNames,
           });
@@ -263,6 +271,224 @@ export const searchReviewsTavily = action({
         resultCount: 0,
         results: [],
       };
+    }
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  CORPUS SEEDING: Search Exa + Tavily for artist reviews
+//  Queued by enrichment pipeline after Layer 2
+// ═══════════════════════════════════════════════════════════════
+
+export const seedCorpusForArtist = internalAction({
+  args: { artistId: v.id("artists") },
+  handler: async (ctx, { artistId }) => {
+    const artist = await ctx.runQuery(internal.enrichment.getArtist, { artistId });
+    if (!artist) return;
+
+    try {
+      // Search Exa for 3-5 reviews
+      const exaResult = await ctx.runAction(internal.reviewSearch.searchReviewsInternal, {
+        query: `${artist.name} music review interview`,
+        artistNames: [artist.name],
+        maxResults: 5,
+      });
+
+      let totalSaved = exaResult.savedCount || 0;
+
+      // If Exa returned < 2, fallback to Tavily
+      if ((exaResult.resultCount || 0) < 2) {
+        const tavilyResult = await ctx.runAction(internal.reviewSearch.searchReviewsTavilyInternal, {
+          query: `${artist.name} music review feature`,
+          artistNames: [artist.name],
+          maxResults: 3,
+        });
+        totalSaved += tavilyResult.savedCount || 0;
+      }
+
+      // Queue NER for any newly saved reviews
+      const unprocessed = await ctx.runQuery(internal.enrichment.getUnprocessedReviews, {
+        limit: 10,
+      });
+
+      for (const review of unprocessed) {
+        if (review.primaryArtistName === artist.name) {
+          await ctx.runMutation(internal.enrichment.queueEnrichmentJobs, {
+            targetType: "review",
+            targetId: review._id,
+            targetName: `Review: ${artist.name} - ${review.title || "untitled"}`,
+            steps: ["ner_extraction"],
+            priority: "normal",
+          });
+        }
+      }
+
+      await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
+        artistId,
+        updates: {},
+        logEntry: {
+          step: "review_corpus_seed",
+          status: "success" as const,
+          timestamp: Date.now(),
+          details: `${totalSaved} reviews saved for ${artist.name}`,
+        },
+      });
+    } catch (error: any) {
+      await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
+        artistId,
+        updates: {},
+        logEntry: {
+          step: "review_corpus_seed",
+          status: "failed" as const,
+          timestamp: Date.now(),
+          details: error.message,
+        },
+      });
+    }
+  },
+});
+
+// Internal Exa search (callable from other actions)
+// Uses neural search + inline contents with influence-focused highlights
+export const searchReviewsInternal = internalAction({
+  args: {
+    query: v.string(),
+    artistNames: v.optional(v.array(v.string())),
+    maxResults: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const maxResults = args.maxResults || 5;
+
+    let searchQuery = args.query;
+    if (args.artistNames?.length) {
+      searchQuery = `${args.artistNames.join(" ")} ${args.query}`;
+    }
+
+    try {
+      const exaResponse = await fetch("https://api.exa.ai/search", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": process.env.EXA_API_KEY!,
+        },
+        body: JSON.stringify({
+          query: searchQuery,
+          type: "neural",
+          useAutoprompt: true,
+          numResults: maxResults,
+          includeDomains: ALL_DOMAINS,
+          contents: {
+            text: {
+              maxCharacters: 5000,
+              includeHtmlTags: false,
+            },
+            highlights: {
+              query: "artist influences, collaborations, musical connections, and related musicians",
+              numSentences: 5,
+              highlightsPerUrl: 3,
+            },
+          },
+        }),
+      });
+
+      if (!exaResponse.ok) throw new Error(`Exa API error: ${exaResponse.status}`);
+
+      const exaData = await exaResponse.json();
+      const results = exaData.results || [];
+
+      let savedCount = 0;
+      for (const result of results) {
+        const publication = detectPublication(result.url);
+        // Use highlights as the excerpt (influence-focused), full text for NER
+        const highlights = result.highlights?.join(" ") || "";
+        const excerpt = highlights.length > 50
+          ? highlights
+          : result.text?.substring(0, 500) || "";
+
+        if (excerpt.length > 50) {
+          await ctx.runMutation(internal.reviewSearch.saveSearchResult, {
+            publication,
+            title: result.title,
+            url: result.url,
+            excerpt,
+            fullText: result.text,
+            publishDate: result.publishedDate,
+            artistNames: args.artistNames,
+          });
+          savedCount++;
+        }
+      }
+
+      return { resultCount: results.length, savedCount };
+    } catch (error: any) {
+      return { resultCount: 0, savedCount: 0, error: error.message };
+    }
+  },
+});
+
+// Internal Tavily search (callable from other actions)
+// Uses advanced depth with raw_content in markdown + 3 chunks per source
+export const searchReviewsTavilyInternal = internalAction({
+  args: {
+    query: v.string(),
+    artistNames: v.optional(v.array(v.string())),
+    maxResults: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const maxResults = args.maxResults || 5;
+
+    let searchQuery = args.query;
+    if (args.artistNames?.length) {
+      searchQuery = `${args.artistNames.join(" ")} music review influences collaborations ${args.query}`;
+    }
+
+    try {
+      const tavilyResponse = await fetch("https://api.tavily.com/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_key: process.env.TAVILY_API_KEY,
+          query: searchQuery,
+          search_depth: "advanced",
+          include_domains: ALL_DOMAINS,
+          max_results: maxResults,
+          include_raw_content: "markdown",
+          chunks_per_source: 3,
+        }),
+      });
+
+      if (!tavilyResponse.ok) throw new Error(`Tavily API error: ${tavilyResponse.status}`);
+
+      const tavilyData = await tavilyResponse.json();
+      const results = tavilyData.results || [];
+
+      let savedCount = 0;
+      for (const result of results) {
+        const publication = detectPublication(result.url);
+        // Use raw_content (markdown) for full NER text, content for excerpt
+        const rawContent = result.raw_content || "";
+        const excerpt = result.content || "";
+        const fullText = rawContent.length > excerpt.length
+          ? rawContent.substring(0, 5000)
+          : undefined;
+
+        if (excerpt.length > 50) {
+          await ctx.runMutation(internal.reviewSearch.saveSearchResult, {
+            publication,
+            title: result.title,
+            url: result.url,
+            excerpt,
+            fullText,
+            publishDate: undefined,
+            artistNames: args.artistNames,
+          });
+          savedCount++;
+        }
+      }
+
+      return { resultCount: results.length, savedCount };
+    } catch (error: any) {
+      return { resultCount: 0, savedCount: 0, error: error.message };
     }
   },
 });

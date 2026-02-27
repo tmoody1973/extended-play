@@ -127,6 +127,9 @@ export default defineSchema({
     genres: v.optional(v.array(v.string())), // From MusicBrainz tags
     bio: v.optional(v.string()), // Short bio from Genius or Discogs
     members: v.optional(v.array(v.string())), // Band members (names)
+    aliases: v.optional(v.array(v.string())), // From Discogs, for NER matching
+    groups: v.optional(v.array(v.string())), // Bands this artist belongs to
+    wikipediaUrl: v.optional(v.string()), // For Wikipedia fetch step
 
     // --- Sonic Profile (averaged across top tracks) ---
     sonicProfile: v.optional(
@@ -365,6 +368,15 @@ export default defineSchema({
       v.literal("loud_and_quiet"),
       v.literal("other")
     ),
+    sourceType: v.optional(v.union(
+      v.literal("album_review"),
+      v.literal("interview"),
+      v.literal("feature"),
+      v.literal("wikipedia"),
+      v.literal("grounded_search"),
+      v.literal("show_notes"),
+      v.literal("manual")
+    )),
     author: v.optional(v.string()),
     title: v.optional(v.string()), // Review headline
     url: v.optional(v.string()),
@@ -587,7 +599,11 @@ export default defineSchema({
       v.literal("ner_extraction"),
       v.literal("sonic_profile_compute"),
       v.literal("graph_metrics_compute"),
-      v.literal("gemini_grounding")
+      v.literal("gemini_grounding"),
+      v.literal("musicbrainz_rels"),
+      v.literal("wikipedia_fetch"),
+      v.literal("gemini_corpus_seed"),
+      v.literal("review_corpus_seed")
     ),
     priority: v.union(
       v.literal("critical"), // Needed for current user conversation

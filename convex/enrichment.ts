@@ -85,17 +85,21 @@ export const enrichArtistLayer1 = internalAction({
         },
       });
 
-      // Queue Layer 2 enrichment jobs
+      // Queue Layer 1b + Layer 2 enrichment jobs
       await ctx.runMutation(internal.enrichment.queueEnrichmentJobs, {
         targetType: "artist",
         targetId: artistId,
         targetName: artist.name,
         steps: [
+          "musicbrainz_rels",
           "discogs_fetch",
           "genius_fetch",
           "fanart_tv_fetch",
           "wikimedia_fetch",
           "youtube_match",
+          "wikipedia_fetch",
+          "review_corpus_seed",
+          "gemini_corpus_seed",
         ],
         priority: "normal",
       });
@@ -105,6 +109,104 @@ export const enrichArtistLayer1 = internalAction({
         updates: {},
         logEntry: {
           step: "musicbrainz_lookup",
+          status: "failed" as const,
+          timestamp: Date.now(),
+          details: error.message,
+        },
+      });
+    }
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  LAYER 1b: MusicBrainz Relationship Extraction
+//  Runs AFTER Layer 1 (needs MBID) — extracts collaborations,
+//  band membership, producer credits
+// ═══════════════════════════════════════════════════════════════
+
+export const enrichArtistMusicBrainzRels = internalAction({
+  args: { artistId: v.id("artists") },
+  handler: async (ctx, { artistId }) => {
+    const artist = await ctx.runQuery(internal.enrichment.getArtist, { artistId });
+    if (!artist?.musicbrainzId) return;
+
+    try {
+      const mbResponse = await fetch(
+        `https://musicbrainz.org/ws/2/artist/${artist.musicbrainzId}?inc=artist-rels&fmt=json`,
+        {
+          headers: {
+            "User-Agent": "RhythmLabExtended/1.0 (contact@rhythmlab.com)",
+          },
+        }
+      );
+
+      if (!mbResponse.ok) throw new Error(`MusicBrainz rels API error: ${mbResponse.status}`);
+
+      const mbData = await mbResponse.json();
+      const relations = mbData.relations || [];
+
+      // Map MusicBrainz relation types to our connection types
+      const MB_TYPE_MAP: Record<string, string> = {
+        "member of band": "shared_member",
+        "is person": "collaboration", // producer credits
+        collaboration: "collaboration",
+        "conductor position": "collaboration",
+        "vocal supporting musician": "collaboration",
+        "instrumental supporting musician": "collaboration",
+        "mix": "collaboration",
+        "remixer": "collaboration",
+        "producer": "collaboration",
+      };
+
+      let connectionsCreated = 0;
+
+      for (const rel of relations) {
+        if (rel["target-type"] !== "artist") continue;
+
+        const mappedType = MB_TYPE_MAP[rel.type];
+        if (!mappedType) continue;
+
+        const targetName = rel.artist?.name;
+        if (!targetName) continue;
+
+        // Find target artist in our DB
+        const targetArtist = await ctx.runQuery(
+          internal.enrichment.findArtistByNameFuzzy,
+          { name: targetName }
+        );
+
+        if (!targetArtist) continue;
+
+        await ctx.runMutation(internal.enrichment.createOrStrengthenConnection, {
+          artistAId: artistId,
+          artistBId: targetArtist._id,
+          connectionType: mappedType,
+          evidence: {
+            type: "credits",
+            source: "MusicBrainz",
+            excerpt: `${rel.type}: ${artist.name} — ${targetName}`,
+            url: `https://musicbrainz.org/artist/${artist.musicbrainzId}`,
+          },
+        });
+        connectionsCreated++;
+      }
+
+      await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
+        artistId,
+        updates: {},
+        logEntry: {
+          step: "musicbrainz_rels",
+          status: "success" as const,
+          timestamp: Date.now(),
+          details: `${connectionsCreated} connections from ${relations.length} relations`,
+        },
+      });
+    } catch (error: any) {
+      await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
+        artistId,
+        updates: {},
+        logEntry: {
+          step: "musicbrainz_rels",
           status: "failed" as const,
           timestamp: Date.now(),
           details: error.message,
@@ -201,22 +303,89 @@ export const enrichArtistDiscogs = internalAction({
         };
       }
 
+      // --- Extract relationship data from Discogs ---
+      const memberNames: string[] = detailData?.members?.map((m: any) => m.name) || [];
+      const groupNames: string[] = detailData?.groups?.map((g: any) => g.name) || [];
+      const aliasNames: string[] = detailData?.aliases?.map((a: any) => a.name) || [];
+
+      // Extract Wikipedia URL from Discogs URLs
+      const discogsUrls: string[] = detailData?.urls || [];
+      const wikipediaUrl = discogsUrls.find((u: string) =>
+        u.includes("wikipedia.org") || u.includes("en.wikipedia.org")
+      );
+
       await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
         artistId,
         updates: {
           discogsId,
           discogsResourceUrl: detailData?.resource_url,
           bio: detailData?.profile?.substring(0, 2000),
-          members: detailData?.members?.map((m: any) => m.name),
+          members: memberNames.length > 0 ? memberNames : undefined,
+          aliases: aliasNames.length > 0 ? aliasNames : undefined,
+          groups: groupNames.length > 0 ? groupNames : undefined,
+          wikipediaUrl,
           images: updatedImages,
         },
         logEntry: {
           step: "discogs_fetch",
           status: "success" as const,
           timestamp: Date.now(),
-          details: `Found: ${discogsArtist.title}, ${allImages.length} images`,
+          details: `Found: ${discogsArtist.title}, ${allImages.length} images, ${memberNames.length} members, ${groupNames.length} groups`,
         },
       });
+
+      // Create shared_member edges for members
+      for (const memberName of memberNames) {
+        const memberArtist = await ctx.runQuery(
+          internal.enrichment.findArtistByNameFuzzy,
+          { name: memberName }
+        );
+        if (memberArtist && memberArtist._id !== artistId) {
+          await ctx.runMutation(internal.enrichment.createOrStrengthenConnection, {
+            artistAId: artistId,
+            artistBId: memberArtist._id,
+            connectionType: "shared_member",
+            evidence: {
+              type: "credits",
+              source: "Discogs",
+              excerpt: `${memberName} is a member of ${artist.name}`,
+              url: `https://www.discogs.com/artist/${discogsId}`,
+            },
+          });
+        }
+      }
+
+      // Create shared_member edges for groups
+      for (const groupName of groupNames) {
+        const groupArtist = await ctx.runQuery(
+          internal.enrichment.findArtistByNameFuzzy,
+          { name: groupName }
+        );
+        if (groupArtist && groupArtist._id !== artistId) {
+          await ctx.runMutation(internal.enrichment.createOrStrengthenConnection, {
+            artistAId: artistId,
+            artistBId: groupArtist._id,
+            connectionType: "shared_member",
+            evidence: {
+              type: "credits",
+              source: "Discogs",
+              excerpt: `${artist.name} is a member of ${groupName}`,
+              url: `https://www.discogs.com/artist/${discogsId}`,
+            },
+          });
+        }
+      }
+
+      // Queue Wikipedia fetch if URL found
+      if (wikipediaUrl) {
+        await ctx.runMutation(internal.enrichment.queueEnrichmentJobs, {
+          targetType: "artist",
+          targetId: artistId,
+          targetName: artist.name,
+          steps: ["wikipedia_fetch"],
+          priority: "normal",
+        });
+      }
     } catch (error: any) {
       await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
         artistId,
@@ -661,6 +830,31 @@ export const processEnrichmentQueue = internalAction({
               artistId: job.targetId as any,
             });
             break;
+          case "musicbrainz_rels":
+            await ctx.runAction(internal.enrichment.enrichArtistMusicBrainzRels, {
+              artistId: job.targetId as any,
+            });
+            break;
+          case "wikipedia_fetch":
+            await ctx.runAction(internal.enrichment.enrichArtistWikipedia, {
+              artistId: job.targetId as any,
+            });
+            break;
+          case "ner_extraction":
+            await ctx.runAction(internal.enrichment.processNerExtraction, {
+              reviewId: job.targetId as any,
+            });
+            break;
+          case "gemini_corpus_seed":
+            await ctx.runAction(internal.geminiGrounding.seedCorpusWithGrounding, {
+              artistId: job.targetId as any,
+            });
+            break;
+          case "review_corpus_seed":
+            await ctx.runAction(internal.reviewSearch.seedCorpusForArtist, {
+              artistId: job.targetId as any,
+            });
+            break;
         }
 
         await ctx.runMutation(internal.enrichment.updateJobStatus, {
@@ -940,6 +1134,536 @@ export const queueEnrichmentJobs = internalMutation({
 });
 
 // ═══════════════════════════════════════════════════════════════
+//  NER CO-MENTION EXTRACTION — The Stell-R Core Loop
+//  Extracts artist mentions from review text, creates co-mention edges
+// ═══════════════════════════════════════════════════════════════
+
+export const processNerExtraction = internalAction({
+  args: { reviewId: v.id("reviews") },
+  handler: async (ctx, { reviewId }) => {
+    const review = await ctx.runQuery(internal.enrichment.getReview, { reviewId });
+    if (!review || review.nerProcessed) return;
+
+    const text = review.fullText || review.excerpt;
+    if (!text || text.length < 20) {
+      await ctx.runMutation(internal.enrichment.updateReviewNer, {
+        reviewId,
+        mentionedArtistIds: [],
+        mentionedArtistNames: [],
+      });
+      return;
+    }
+
+    // Get primary artist name to exclude self-mentions
+    const primaryName = review.primaryArtistName || "";
+
+    // Run NER extraction
+    const mentions = extractArtistMentions(text, primaryName);
+
+    const matchedIds: any[] = [];
+    const matchedNames: string[] = [];
+
+    for (const mention of mentions) {
+      const artist = await ctx.runQuery(
+        internal.enrichment.findArtistByNameFuzzy,
+        { name: mention.name }
+      );
+
+      if (!artist) continue;
+
+      matchedIds.push(artist._id);
+      matchedNames.push(mention.name);
+
+      // Create co-mention edge if we have a primary artist
+      if (review.primaryArtistId) {
+        const weight = mention.isInfluenceContext ? 0.5 : 0.3;
+        await ctx.runMutation(internal.enrichment.createOrStrengthenConnection, {
+          artistAId: review.primaryArtistId,
+          artistBId: artist._id,
+          connectionType: "review_comention",
+          weight,
+          evidence: {
+            type: "review",
+            source: review.publication || "unknown",
+            excerpt: mention.context?.substring(0, 200),
+            url: review.url,
+            date: review.publishDate,
+          },
+          reviewId,
+        });
+      }
+    }
+
+    await ctx.runMutation(internal.enrichment.updateReviewNer, {
+      reviewId,
+      mentionedArtistIds: matchedIds,
+      mentionedArtistNames: matchedNames,
+    });
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  WIKIPEDIA BIO + INFLUENCE EXTRACTION
+//  Free API — extracts bio, associated acts, influence sections
+// ═══════════════════════════════════════════════════════════════
+
+export const enrichArtistWikipedia = internalAction({
+  args: { artistId: v.id("artists") },
+  handler: async (ctx, { artistId }) => {
+    const artist = await ctx.runQuery(internal.enrichment.getArtist, { artistId });
+    if (!artist) return;
+
+    try {
+      // Determine Wikipedia title from URL or artist name
+      let wikiTitle: string;
+      if (artist.wikipediaUrl) {
+        const urlParts = artist.wikipediaUrl.split("/wiki/");
+        wikiTitle = urlParts[urlParts.length - 1] || encodeURIComponent(artist.name);
+      } else {
+        // Search Wikipedia for the artist
+        const searchResp = await fetch(
+          `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(artist.name + " musician")}&format=json&srlimit=3`
+        );
+        if (!searchResp.ok) throw new Error(`Wikipedia search error: ${searchResp.status}`);
+        const searchData = await searchResp.json();
+        const firstResult = searchData.query?.search?.[0];
+        if (!firstResult) {
+          await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
+            artistId,
+            updates: {},
+            logEntry: {
+              step: "wikipedia_fetch",
+              status: "skipped" as const,
+              timestamp: Date.now(),
+              details: "No Wikipedia article found",
+            },
+          });
+          return;
+        }
+        wikiTitle = firstResult.title.replace(/ /g, "_");
+      }
+
+      // Fetch summary for bio
+      const summaryResp = await fetch(
+        `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(wikiTitle)}`
+      );
+
+      let bio: string | undefined;
+      if (summaryResp.ok) {
+        const summaryData = await summaryResp.json();
+        bio = summaryData.extract;
+      }
+
+      // Fetch full page HTML for associated acts / influences parsing
+      const pageResp = await fetch(
+        `https://en.wikipedia.org/w/api.php?action=parse&page=${encodeURIComponent(wikiTitle)}&prop=wikitext&format=json`
+      );
+
+      let associatedActs: string[] = [];
+      let influencedBy: string[] = [];
+      let wikitext = "";
+
+      if (pageResp.ok) {
+        const pageData = await pageResp.json();
+        wikitext = pageData.parse?.wikitext?.["*"] || "";
+
+        // Extract "Associated acts" from infobox
+        const associatedMatch = wikitext.match(
+          /\|\s*associated_acts\s*=\s*([\s\S]+?)(?:\n\||\n\}\})/
+        );
+        if (associatedMatch) {
+          const rawList = associatedMatch[1];
+          // Extract wiki links: [[Artist Name]] or [[Artist Name|Display Name]]
+          const linkMatches = rawList.matchAll(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g);
+          for (const match of linkMatches) {
+            associatedActs.push(match[2] || match[1]);
+          }
+        }
+
+        // Extract "Influences" section
+        const influenceMatch = wikitext.match(
+          /={2,3}\s*(?:Influences|Musical influences)\s*={2,3}\s*([\s\S]*?)(?=\n={2,3}|\n\[\[Category)/i
+        );
+        if (influenceMatch) {
+          const influenceText = influenceMatch[1];
+          const linkMatches = influenceText.matchAll(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g);
+          for (const match of linkMatches) {
+            influencedBy.push(match[2] || match[1]);
+          }
+        }
+      }
+
+      // Update artist bio if richer than existing
+      const updates: Record<string, any> = {};
+      if (bio && (!artist.bio || bio.length > artist.bio.length)) {
+        updates.bio = bio.substring(0, 2000);
+      }
+      if (!artist.wikipediaUrl) {
+        updates.wikipediaUrl = `https://en.wikipedia.org/wiki/${wikiTitle}`;
+      }
+
+      await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
+        artistId,
+        updates,
+        logEntry: {
+          step: "wikipedia_fetch",
+          status: "success" as const,
+          timestamp: Date.now(),
+          details: `Bio: ${bio ? bio.length : 0} chars, ${associatedActs.length} associated acts, ${influencedBy.length} influences`,
+        },
+      });
+
+      // Save Wikipedia content as a review for NER processing
+      const wikiContent = [bio, wikitext.substring(0, 3000)].filter(Boolean).join("\n\n");
+      if (wikiContent.length > 100) {
+        await ctx.runMutation(internal.enrichment.saveWikipediaReview, {
+          artistId,
+          artistName: artist.name,
+          wikiTitle,
+          content: wikiContent.substring(0, 5000),
+        });
+      }
+
+      // Create collaboration edges for explicit associated acts
+      for (const actName of [...associatedActs, ...influencedBy]) {
+        const targetArtist = await ctx.runQuery(
+          internal.enrichment.findArtistByNameFuzzy,
+          { name: actName }
+        );
+        if (targetArtist && targetArtist._id !== artistId) {
+          const type = influencedBy.includes(actName) ? "collaboration" : "collaboration";
+          await ctx.runMutation(internal.enrichment.createOrStrengthenConnection, {
+            artistAId: artistId,
+            artistBId: targetArtist._id,
+            connectionType: type,
+            evidence: {
+              type: "credits",
+              source: "Wikipedia",
+              excerpt: influencedBy.includes(actName)
+                ? `${actName} listed as influence on ${artist.name}`
+                : `${actName} listed as associated act of ${artist.name}`,
+              url: `https://en.wikipedia.org/wiki/${wikiTitle}`,
+            },
+          });
+        }
+      }
+    } catch (error: any) {
+      await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
+        artistId,
+        updates: {},
+        logEntry: {
+          step: "wikipedia_fetch",
+          status: "failed" as const,
+          timestamp: Date.now(),
+          details: error.message,
+        },
+      });
+    }
+  },
+});
+
+// Save Wikipedia content to reviews table for NER
+export const saveWikipediaReview = internalMutation({
+  args: {
+    artistId: v.id("artists"),
+    artistName: v.string(),
+    wikiTitle: v.string(),
+    content: v.string(),
+  },
+  handler: async (ctx, { artistId, artistName, wikiTitle, content }) => {
+    const reviewId = await ctx.db.insert("reviews", {
+      publication: "other",
+      sourceType: "wikipedia",
+      title: `Wikipedia: ${artistName}`,
+      url: `https://en.wikipedia.org/wiki/${wikiTitle}`,
+      excerpt: content.substring(0, 500),
+      fullText: content,
+      primaryArtistId: artistId,
+      primaryArtistName: artistName,
+      nerProcessed: false,
+      createdAt: Date.now(),
+    });
+
+    // Queue NER for this review
+    await ctx.db.insert("enrichmentJobs", {
+      targetType: "review",
+      targetId: reviewId.toString(),
+      targetName: `Wikipedia: ${artistName}`,
+      step: "ner_extraction",
+      priority: "normal",
+      status: "queued",
+      attempts: 0,
+      maxAttempts: 3,
+      scheduledAt: Date.now(),
+      createdAt: Date.now(),
+    });
+  },
+});
+
+// Save a grounded source (from Gemini) to reviews table + queue NER
+export const saveGroundedSource = internalMutation({
+  args: {
+    artistId: v.id("artists"),
+    artistName: v.string(),
+    title: v.string(),
+    url: v.string(),
+    excerpt: v.string(),
+  },
+  handler: async (ctx, { artistId, artistName, title, url, excerpt }) => {
+    const publication = detectPublicationFromUrl(url);
+
+    const reviewId = await ctx.db.insert("reviews", {
+      publication,
+      sourceType: "grounded_search",
+      title,
+      url,
+      excerpt: excerpt.substring(0, 500),
+      fullText: excerpt,
+      primaryArtistId: artistId,
+      primaryArtistName: artistName,
+      nerProcessed: false,
+      createdAt: Date.now(),
+    });
+
+    await ctx.db.insert("enrichmentJobs", {
+      targetType: "review",
+      targetId: reviewId.toString(),
+      targetName: `Grounded: ${artistName} - ${title}`,
+      step: "ner_extraction",
+      priority: "normal",
+      status: "queued",
+      attempts: 0,
+      maxAttempts: 3,
+      scheduledAt: Date.now(),
+      createdAt: Date.now(),
+    });
+  },
+});
+
+function detectPublicationFromUrl(url: string): any {
+  const domainMap: Record<string, string> = {
+    "pitchfork.com": "pitchfork",
+    "npr.org": "npr",
+    "thequietus.com": "the_quietus",
+    "residentadvisor.net": "resident_advisor",
+    "bandcamp.com": "bandcamp_daily",
+    "thewirecuk.com": "the_wire",
+    "thefader.com": "the_fader",
+    "stereogum.com": "stereogum",
+    "okayplayer.com": "okayplayer",
+    "thevinylfactory.com": "the_vinyl_factory",
+    "factmag.com": "fact_mag",
+    "xlr8r.com": "xlr8r",
+    "djmag.com": "dj_mag",
+    "aquariumdrunkard.com": "aquarium_drunkard",
+    "tinymixtapes.com": "tiny_mix_tapes",
+    "theguardian.com": "the_guardian",
+    "nytimes.com": "nyt",
+    "genius.com": "genius",
+    "waxpoetics.com": "wax_poetics",
+    "crackmagazine.net": "crack_magazine",
+    "clashmusic.com": "clash_music",
+    "loudandquiet.com": "loud_and_quiet",
+    "passionweiss.com": "passion_of_the_weiss",
+  };
+
+  for (const [domain, pub] of Object.entries(domainMap)) {
+    if (url.includes(domain)) return pub;
+  }
+  return "other";
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SHARED UTILITIES: Connection creation + Fuzzy artist matching
+//  Used by MB rels, Discogs rels, Wikipedia, NER, Gemini grounding
+// ═══════════════════════════════════════════════════════════════
+
+// Base weights per connection type
+const CONNECTION_BASE_WEIGHTS: Record<string, number> = {
+  collaboration: 0.7,
+  shared_member: 0.5,
+  review_comention: 0.3,
+  same_label: 0.2,
+  sample: 0.6,
+  show_notes: 0.2,
+  manual: 0.5,
+  playlist_adjacent: 1.0,
+};
+
+const EVIDENCE_CAP = 20;
+
+export const createOrStrengthenConnection = internalMutation({
+  args: {
+    artistAId: v.id("artists"),
+    artistBId: v.id("artists"),
+    connectionType: v.string(),
+    weight: v.optional(v.number()),
+    evidence: v.optional(
+      v.object({
+        type: v.string(),
+        source: v.string(),
+        excerpt: v.optional(v.string()),
+        url: v.optional(v.string()),
+        date: v.optional(v.string()),
+      })
+    ),
+    reviewId: v.optional(v.id("reviews")),
+  },
+  handler: async (ctx, args) => {
+    const { artistAId, artistBId, connectionType, evidence, reviewId } = args;
+
+    // Self-edge prevention
+    if (artistAId === artistBId) return null;
+
+    // Direction normalization: smaller ID = source
+    const [sourceId, targetId] =
+      artistAId.toString() < artistBId.toString()
+        ? [artistAId, artistBId]
+        : [artistBId, artistAId];
+
+    const baseWeight = args.weight ?? CONNECTION_BASE_WEIGHTS[connectionType] ?? 0.3;
+    const now = Date.now();
+
+    // Check for existing edge
+    const existing = await ctx.db
+      .query("artistConnections")
+      .withIndex("by_pair", (q) =>
+        q.eq("sourceArtistId", sourceId).eq("targetArtistId", targetId)
+      )
+      .first();
+
+    if (existing) {
+      // Upsert: add type if new, append evidence, increment weight
+      const updatedTypes = existing.connectionTypes.includes(connectionType as any)
+        ? existing.connectionTypes
+        : [...existing.connectionTypes, connectionType as any];
+
+      const currentEvidence = existing.evidence || [];
+      const updatedEvidence = evidence && currentEvidence.length < EVIDENCE_CAP
+        ? [...currentEvidence, evidence]
+        : currentEvidence;
+
+      const updates: Record<string, any> = {
+        connectionTypes: updatedTypes,
+        evidence: updatedEvidence,
+        weight: existing.weight + baseWeight,
+        updatedAt: now,
+      };
+
+      // Track co-mention specifics
+      if (connectionType === "review_comention") {
+        updates.coMentionCount = (existing.coMentionCount || 0) + 1;
+        if (reviewId) {
+          updates.reviewIds = [...(existing.reviewIds || []), reviewId];
+        }
+      }
+
+      await ctx.db.patch(existing._id, updates);
+      return existing._id;
+    }
+
+    // Create new edge
+    const newEdge: Record<string, any> = {
+      sourceArtistId: sourceId,
+      targetArtistId: targetId,
+      weight: baseWeight,
+      connectionTypes: [connectionType],
+      evidence: evidence ? [evidence] : [],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    if (connectionType === "review_comention") {
+      newEdge.coMentionCount = 1;
+      if (reviewId) newEdge.reviewIds = [reviewId];
+    }
+
+    return await ctx.db.insert("artistConnections", newEdge as any);
+  },
+});
+
+// Fuzzy artist lookup: exact match → search index → nameVariants/aliases
+export const findArtistByNameFuzzy = internalQuery({
+  args: { name: v.string() },
+  handler: async (ctx, { name }) => {
+    const normalized = name.trim();
+    if (!normalized) return null;
+
+    // 1. Exact match on by_name index
+    const exact = await ctx.db
+      .query("artists")
+      .withIndex("by_name", (q) => q.eq("name", normalized))
+      .first();
+    if (exact) return exact;
+
+    // 2. Case-insensitive via search index
+    const searchResults = await ctx.db
+      .query("artists")
+      .withSearchIndex("search_artists", (q) => q.search("name", normalized))
+      .take(10);
+
+    // Check nameVariants and aliases for matches
+    const lowerName = normalized.toLowerCase();
+    for (const artist of searchResults) {
+      if (artist.name.toLowerCase() === lowerName) return artist;
+
+      const variants = artist.nameVariants || [];
+      if (variants.some((v: string) => v.toLowerCase() === lowerName)) return artist;
+
+      const aliases = artist.aliases || [];
+      if (aliases.some((a: string) => a.toLowerCase() === lowerName)) return artist;
+    }
+
+    // 3. Return top search result if name is a close prefix match
+    if (searchResults.length > 0) {
+      const top = searchResults[0];
+      if (
+        top.name.toLowerCase().startsWith(lowerName) ||
+        lowerName.startsWith(top.name.toLowerCase())
+      ) {
+        return top;
+      }
+    }
+
+    return null;
+  },
+});
+
+// Get a review by ID (used by NER extraction)
+export const getReview = internalQuery({
+  args: { reviewId: v.id("reviews") },
+  handler: async (ctx, { reviewId }) => ctx.db.get(reviewId),
+});
+
+// Get unprocessed reviews for NER
+export const getUnprocessedReviews = internalQuery({
+  args: { limit: v.number() },
+  handler: async (ctx, { limit }) => {
+    return await ctx.db
+      .query("reviews")
+      .withIndex("by_nerProcessed", (q) => q.eq("nerProcessed", false))
+      .take(limit);
+  },
+});
+
+// Update review after NER processing
+export const updateReviewNer = internalMutation({
+  args: {
+    reviewId: v.id("reviews"),
+    mentionedArtistIds: v.array(v.id("artists")),
+    mentionedArtistNames: v.array(v.string()),
+  },
+  handler: async (ctx, { reviewId, mentionedArtistIds, mentionedArtistNames }) => {
+    await ctx.db.patch(reviewId, {
+      mentionedArtistIds,
+      mentionedArtistNames,
+      nerProcessed: true,
+      nerProcessedAt: Date.now(),
+    });
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════
 //  HELPERS
 // ═══════════════════════════════════════════════════════════════
 
@@ -951,3 +1675,132 @@ function pitchClassFromKey(keyName: string): number {
   };
   return map[keyName] ?? 0;
 }
+
+// ═══════════════════════════════════════════════════════════════
+//  NER: Extract artist mentions from text (Stell-R methodology)
+//  Ported from crate-cli extractArtistMentions()
+// ═══════════════════════════════════════════════════════════════
+
+// False positives: common non-artist strings that match Title Case
+const NER_FALSE_POSITIVES = new Set([
+  "The New York Times", "The Guardian", "The Wire", "Rolling Stone",
+  "The Fader", "Pitchfork", "NPR", "BBC", "The Record", "Sound On Sound",
+  "The Vinyl Factory", "Resident Advisor", "Bandcamp Daily",
+  "Record Store Day", "Album Of The Year", "Song Of The Year",
+  "Best New Music", "Record Of The Year", "Music Video",
+  "Grammy Award", "Mercury Prize", "North America", "South America",
+  "United States", "United Kingdom", "New York", "Los Angeles",
+  "San Francisco", "New Orleans", "South London", "East London",
+  "West Africa", "East Africa", "South Africa", "North Africa",
+  "World Music", "Electronic Music", "Hip Hop", "Rhythm And Blues",
+  "The Album", "The Song", "The Track", "The Record", "The Band",
+  "The Group", "The Duo", "The Producer", "Last Year", "Next Year",
+  "This Year", "First Album", "Second Album", "Third Album",
+  "Best Songs", "Best Albums", "Best Tracks", "Best Music",
+  "West African", "Could We Be Here", "Neo Soul",
+  "The London", "The Berlin", "The Paris", "The Chicago",
+]);
+
+// Influence phrase families (5 families from Stell-R paper)
+const INFLUENCE_PHRASES = [
+  /influenced\s+by/i,
+  /in\s+the\s+(?:vein|tradition|spirit)\s+of/i,
+  /sounds?\s+like/i,
+  /owes?\s+(?:a\s+)?(?:debt|lot)\s+to/i,
+  /following\s+in\s+the\s+footsteps?\s+of/i,
+  /reminiscent\s+of/i,
+  /echoes?\s+(?:of\s+)?/i,
+  /channeling/i,
+  /paying\s+(?:homage|tribute)\s+to/i,
+  /inspired\s+by/i,
+  /draws?\s+(?:from|on|inspiration)/i,
+  /heirs?\s+(?:to|of)/i,
+  /descendants?\s+of/i,
+  /in\s+the\s+mold\s+of/i,
+];
+
+interface ArtistMention {
+  name: string;
+  isInfluenceContext: boolean;
+  context?: string;
+}
+
+function extractArtistMentions(text: string, primaryArtistName: string): ArtistMention[] {
+  const mentions: ArtistMention[] = [];
+  const seenNames = new Set<string>();
+  const primaryLower = primaryArtistName.toLowerCase();
+
+  function addMention(name: string, isInfluenceContext: boolean, context: string) {
+    const trimName = name.trim().replace(/'s$/, ""); // strip possessives
+    if (
+      trimName.length >= 4 &&
+      !NER_FALSE_POSITIVES.has(trimName) &&
+      trimName.toLowerCase() !== primaryLower &&
+      !seenNames.has(trimName.toLowerCase())
+    ) {
+      seenNames.add(trimName.toLowerCase());
+      mentions.push({ name: trimName, isInfluenceContext, context });
+    }
+  }
+
+  // Split text into sentences for context
+  const sentences = text.split(/[.!?]+/).filter((s) => s.trim().length > 10);
+
+  for (const sentence of sentences) {
+    const trimmed = sentence.trim();
+    const isInfluenceContext = INFLUENCE_PHRASES.some((re) => re.test(trimmed));
+    let match;
+
+    // Pattern 1: Title Case names (2-5 words) with article connectors
+    // Catches: "Fela Kuti", "Sons of Kemet", "Queens of the Stone Age", "The Roots"
+    // Does NOT join across "and"/"," — those separate different artists
+    const titleCaseRegex = /\b((?:The\s+)?[A-Z][a-z]+(?:(?:\s+(?:of|the|de|van|von|del|la|el|al)\s+(?:the\s+)?[A-Z][a-z]+)|\s+[A-Z][a-z]+){1,4})\b/g;
+    while ((match = titleCaseRegex.exec(trimmed)) !== null) {
+      const ctx = trimmed.substring(
+        Math.max(0, match.index - 50),
+        Math.min(trimmed.length, match.index + match[1].length + 50)
+      );
+      addMention(match[1], isInfluenceContext, ctx);
+    }
+
+    // Pattern 2: ALL-CAPS words (3+ chars) — "DOOM", "JPEGMAFIA"
+    const allCapsRegex = /\b([A-Z]{3,})\b/g;
+    while ((match = allCapsRegex.exec(trimmed)) !== null) {
+      const name = match[1];
+      if (!CAPS_STOPWORDS.has(name)) {
+        const ctx = trimmed.substring(
+          Math.max(0, match.index - 50),
+          Math.min(trimmed.length, match.index + name.length + 50)
+        );
+        addMention(name, isInfluenceContext, ctx);
+      }
+    }
+
+    // Pattern 3: ALL-CAPS + Title Case — "DJ Shadow", "MF DOOM", "DJ Premier"
+    const mixedRegex = /\b([A-Z]{2,3}\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/g;
+    while ((match = mixedRegex.exec(trimmed)) !== null) {
+      const ctx = trimmed.substring(
+        Math.max(0, match.index - 50),
+        Math.min(trimmed.length, match.index + match[1].length + 50)
+      );
+      addMention(match[1], isInfluenceContext, ctx);
+    }
+  }
+
+  // Sort: influence-context mentions first
+  mentions.sort((a, b) => {
+    if (a.isInfluenceContext && !b.isInfluenceContext) return -1;
+    if (!a.isInfluenceContext && b.isInfluenceContext) return 1;
+    return 0;
+  });
+
+  return mentions;
+}
+
+const CAPS_STOPWORDS = new Set([
+  "THE", "AND", "FOR", "BUT", "NOT", "ALL", "HAS", "HAD", "HIS", "HER",
+  "WAS", "ARE", "ITS", "OUR", "WHO", "HOW", "NEW", "OLD", "OWN", "OUT",
+  "ONE", "TWO", "GET", "GOT", "CAN", "MAY", "USE", "WAY", "DAY", "MAN",
+  "NOW", "RUN", "SET", "TRY", "TOP", "END", "BIG", "LET", "SAY",
+  "NPR", "BBC", "DIY", "NYC", "USA", "LED", "NEO",
+]);

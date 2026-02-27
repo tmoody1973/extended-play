@@ -98,6 +98,151 @@ export const enrichArtistWithGrounding = internalAction({
   },
 });
 
+// ═══════════════════════════════════════════════════════════════
+//  CORPUS SEEDING: Find interviews, features, profiles via Grounding
+//  Extracts grounded sources → saves to reviews table → queues NER
+// ═══════════════════════════════════════════════════════════════
+
+export const seedCorpusWithGrounding = internalAction({
+  args: { artistId: v.id("artists") },
+  handler: async (ctx, { artistId }) => {
+    const artist = await ctx.runQuery(internal.enrichment.getArtist, { artistId });
+    if (!artist) return;
+
+    try {
+      const { VertexAI } = require("@google-cloud/vertexai");
+      const vertexAI = new VertexAI({
+        project: process.env.GOOGLE_CLOUD_PROJECT || "extended-play-488702",
+        location: "us-central1",
+      });
+      const model = vertexAI.getGenerativeModel({ model: "gemini-3.0-pro" });
+
+      const response = await model.generateContent({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: `Find interviews, features, and profiles discussing the musical influences, collaborations, and artistic connections of ${artist.name}. Include specific artist names mentioned as influences. Return JSON with: sources (array of {title, url, excerpt}), relatedArtists (array of artist name strings found in sources).`,
+              },
+            ],
+          },
+        ],
+        tools: [{ google_search: {} }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              sources: {
+                type: "ARRAY",
+                items: {
+                  type: "OBJECT",
+                  properties: {
+                    title: { type: "STRING" },
+                    url: { type: "STRING" },
+                    excerpt: { type: "STRING" },
+                  },
+                },
+              },
+              relatedArtists: { type: "ARRAY", items: { type: "STRING" } },
+            },
+          },
+        },
+      });
+
+      const text = response.response.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) {
+        await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
+          artistId,
+          updates: {},
+          logEntry: {
+            step: "gemini_corpus_seed",
+            status: "failed",
+            timestamp: Date.now(),
+            details: "No response from Gemini",
+          },
+        });
+        return;
+      }
+
+      const result = JSON.parse(text);
+      const sources = result.sources || [];
+      const relatedArtists = result.relatedArtists || [];
+
+      // Also extract from grounding metadata if available
+      const groundingChunks =
+        response.response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+
+      // Save each grounded source to reviews table
+      let savedCount = 0;
+      const allSources = [
+        ...sources.map((s: any) => ({ title: s.title, url: s.url, excerpt: s.excerpt })),
+        ...groundingChunks
+          .filter((c: any) => c.web?.uri)
+          .map((c: any) => ({ title: c.web.title || "", url: c.web.uri, excerpt: "" })),
+      ];
+
+      for (const source of allSources) {
+        if (!source.url || !source.excerpt && !source.title) continue;
+
+        await ctx.runMutation(internal.enrichment.saveGroundedSource, {
+          artistId,
+          artistName: artist.name,
+          title: source.title,
+          url: source.url,
+          excerpt: source.excerpt || source.title || "",
+        });
+        savedCount++;
+      }
+
+      // Create direct edges for relatedArtists from Gemini's structured response
+      let edgesCreated = 0;
+      for (const relatedName of relatedArtists) {
+        const relatedArtist = await ctx.runQuery(
+          internal.enrichment.findArtistByNameFuzzy,
+          { name: relatedName }
+        );
+        if (relatedArtist && relatedArtist._id !== artistId) {
+          await ctx.runMutation(internal.enrichment.createOrStrengthenConnection, {
+            artistAId: artistId,
+            artistBId: relatedArtist._id,
+            connectionType: "collaboration",
+            evidence: {
+              type: "review",
+              source: "Gemini Grounding",
+              excerpt: `${relatedName} identified as connected to ${artist.name} via grounded search`,
+            },
+          });
+          edgesCreated++;
+        }
+      }
+
+      await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
+        artistId,
+        updates: {},
+        logEntry: {
+          step: "gemini_corpus_seed",
+          status: "success",
+          timestamp: Date.now(),
+          details: `${savedCount} sources saved, ${edgesCreated} edges from ${relatedArtists.length} related artists`,
+        },
+      });
+    } catch (error: any) {
+      await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
+        artistId,
+        updates: {},
+        logEntry: {
+          step: "gemini_corpus_seed",
+          status: "failed",
+          timestamp: Date.now(),
+          details: error.message,
+        },
+      });
+    }
+  },
+});
+
 // Batch starter: enqueue artists missing bios/genres for Gemini Grounding
 export const enrichArtistsWithGrounding = action({
   args: { limit: v.optional(v.number()) },
