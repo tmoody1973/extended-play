@@ -690,7 +690,7 @@ export const enrichAllStubArtists = action({
   handler: async (ctx): Promise<{ queued: number }> => {
     const stubs = await ctx.runQuery(internal.enrichment.getArtistsByStatus, {
       status: "stub",
-      limit: 100,
+      limit: 500,
     });
 
     for (const stub of stubs) {

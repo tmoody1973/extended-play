@@ -6,12 +6,12 @@ import { internal } from "./_generated/api";
 
 const crons = cronJobs();
 
-// Process enrichment queue every 30 seconds
+// Process enrichment queue every 15 seconds
 crons.interval(
   "process enrichment queue",
-  { seconds: 30 },
+  { seconds: 15 },
   internal.enrichment.processEnrichmentQueue,
-  { batchSize: 5 } // Conservative batch to respect API rate limits
+  { batchSize: 10 } // Moderate batch — respects MusicBrainz 1req/s, Discogs 60/min
 );
 
 export default crons;
