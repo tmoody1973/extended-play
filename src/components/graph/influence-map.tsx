@@ -47,8 +47,8 @@ export function InfluenceMap({ onNodeClick, highlightedNodeId }: InfluenceMapPro
     ? JSON.parse(graphSnapshot.nodesJson).map((n: any) => ({
         id: n.id,
         name: n.name,
-        imageUrl: n.imageUrl,
-        communityId: n.community,
+        imageUrl: n.img || n.imageUrl,
+        communityId: n.c ?? n.community,
       }))
     : demoNodes;
 
@@ -56,7 +56,7 @@ export function InfluenceMap({ onNodeClick, highlightedNodeId }: InfluenceMapPro
     ? JSON.parse(graphSnapshot.edgesJson).map((e: any) => ({
         source: e.source,
         target: e.target,
-        weight: e.weight,
+        weight: e.w ?? e.weight,
       }))
     : demoEdges;
 

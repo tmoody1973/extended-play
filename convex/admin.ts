@@ -722,47 +722,52 @@ export const forceReenrichArtist = mutation({
 export const buildGraphSnapshot = mutation({
   args: {
     label: v.optional(v.string()),
+    minConnections: v.optional(v.number()), // Minimum connections to include (default 2)
   },
-  handler: async (ctx, { label }) => {
+  handler: async (ctx, { label, minConnections = 2 }) => {
     const now = Date.now();
 
-    // Collect all artists with at least one connection
+    // Collect all artists and connections
     const allArtists = await ctx.db.query("artists").collect();
     const allConnections = await ctx.db.query("artistConnections").collect();
 
-    // Build set of artist IDs that have connections
-    const connectedIds = new Set<string>();
+    // Count connections per artist
+    const connectionCount = new Map<string, number>();
     for (const conn of allConnections) {
-      connectedIds.add(conn.sourceArtistId.toString());
-      connectedIds.add(conn.targetArtistId.toString());
+      const src = conn.sourceArtistId.toString();
+      const tgt = conn.targetArtistId.toString();
+      connectionCount.set(src, (connectionCount.get(src) || 0) + 1);
+      connectionCount.set(tgt, (connectionCount.get(tgt) || 0) + 1);
     }
 
-    // Filter to connected artists only
-    const artists = allArtists.filter((a) => connectedIds.has(a._id.toString()));
+    // Filter to artists with enough connections
+    const includedIds = new Set<string>();
+    for (const [id, count] of connectionCount) {
+      if (count >= minConnections) includedIds.add(id);
+    }
 
-    // Build nodes
+    const artists = allArtists.filter((a) => includedIds.has(a._id.toString()));
+
+    // Build compact nodes (minimal fields to stay under 1MB)
     const nodes = artists.map((a, i) => ({
       id: a._id,
       name: a.name,
-      community: a.communityId ?? 0,
-      communityLabel: a.communityLabel,
-      size: Math.max(3, (a.bridgeScore ?? 0) * 10 + 3),
-      imageUrl: a.images?.thumbnail?.url || a.images?.primary?.url,
-      genres: a.genres?.slice(0, 3),
-      country: a.country,
-      enrichmentStatus: a.enrichmentStatus,
-      // Initial positions in a circle
-      x: 400 + 300 * Math.cos((2 * Math.PI * i) / artists.length),
-      y: 300 + 200 * Math.sin((2 * Math.PI * i) / artists.length),
+      c: a.communityId ?? 0, // community (short key)
+      s: Math.max(3, (connectionCount.get(a._id.toString()) || 0)), // size = connection count
+      img: a.images?.thumbnail?.url || a.images?.primary?.url || undefined,
     }));
 
-    // Build edges
-    const edges = allConnections.map((c) => ({
-      source: c.sourceArtistId,
-      target: c.targetArtistId,
-      weight: c.weight,
-      types: c.connectionTypes,
-    }));
+    // Filter edges to only included artists
+    const edges = allConnections
+      .filter((c) =>
+        includedIds.has(c.sourceArtistId.toString()) &&
+        includedIds.has(c.targetArtistId.toString())
+      )
+      .map((c) => ({
+        source: c.sourceArtistId,
+        target: c.targetArtistId,
+        w: c.weight, // short key
+      }));
 
     // Deactivate any existing active snapshot
     const activeSnapshot = await ctx.db
