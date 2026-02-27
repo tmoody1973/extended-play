@@ -20,6 +20,9 @@ export default function Home() {
   const [selectedArtistId, setSelectedArtistId] = useState<string | undefined>();
   const [storyItems, setStoryItems] = useState<AgentEvent[]>([]);
   const [highlightedNodeId, setHighlightedNodeId] = useState<string | undefined>();
+  const [selectedTimeRange, setSelectedTimeRange] = useState<
+    { startTimestamp: number; endTimestamp: number } | undefined
+  >();
 
   // When an episode is selected, get its tracks to filter the graph
   const episodeWithTracks = useQuery(
@@ -27,11 +30,22 @@ export default function Home() {
     selectedEpisodeId ? { episodeId: selectedEpisodeId } : "skip"
   );
 
-  // Build set of artist IDs from selected episode
+  // When a time range is selected, get all artist IDs from that period
+  const timeRangeArtists = useQuery(
+    api.queries.getArtistIdsByDateRange,
+    selectedTimeRange ?? "skip"
+  );
+
+  // Merge filters: time range OR episode, not both
   const filterArtistIds = useMemo(() => {
-    if (!episodeWithTracks?.tracks) return undefined;
-    return new Set(episodeWithTracks.tracks.map((t: any) => t.artistId));
-  }, [episodeWithTracks]);
+    if (timeRangeArtists?.artistIds) {
+      return new Set(timeRangeArtists.artistIds);
+    }
+    if (episodeWithTracks?.tracks) {
+      return new Set(episodeWithTracks.tracks.map((t: any) => t.artistId));
+    }
+    return undefined;
+  }, [timeRangeArtists, episodeWithTracks]);
 
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
@@ -84,9 +98,10 @@ export default function Home() {
       <MainLayout
         sidebar={
           <EpisodeSidebar
-            episodeId={selectedEpisodeId}
             onEpisodeSelect={setSelectedEpisodeId}
             onTrackSelect={handleTrackSelect}
+            onTimeRangeSelect={setSelectedTimeRange}
+            activeTimeRange={selectedTimeRange}
           />
         }
         graph={

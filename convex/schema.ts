@@ -586,7 +586,8 @@ export default defineSchema({
       v.literal("youtube_match"),
       v.literal("ner_extraction"),
       v.literal("sonic_profile_compute"),
-      v.literal("graph_metrics_compute")
+      v.literal("graph_metrics_compute"),
+      v.literal("gemini_grounding")
     ),
     priority: v.union(
       v.literal("critical"), // Needed for current user conversation

@@ -809,3 +809,173 @@ export const buildGraphSnapshot = mutation({
     };
   },
 });
+
+// ═══════════════════════════════════════════════════════════════
+//  EPISODE DATE MANAGEMENT
+//  Parse dates from titles + manual editing
+// ═══════════════════════════════════════════════════════════════
+
+// Update a single episode's air date (admin manual edit)
+export const updateEpisodeDate = mutation({
+  args: {
+    episodeId: v.id("episodes"),
+    airDate: v.string(), // ISO date string YYYY-MM-DD
+  },
+  handler: async (ctx, { episodeId, airDate }) => {
+    const episode = await ctx.db.get(episodeId);
+    if (!episode) throw new Error("Episode not found");
+
+    const airDateTimestamp = new Date(airDate).getTime();
+    await ctx.db.patch(episodeId, {
+      airDate,
+      airDateTimestamp,
+      updatedAt: Date.now(),
+    });
+
+    return { episodeId, oldDate: episode.airDate, newDate: airDate };
+  },
+});
+
+// Parse a M-D-YY or M-D-YYYY date pattern from an episode title
+function parseDateFromTitle(title: string): string | null {
+  // Pattern 1: M-D-YY or M-D-YYYY anywhere in the title
+  // Match the LAST occurrence (most likely the actual air date, not a year reference)
+  const dateMatches = [...title.matchAll(/(\d{1,2})-(\d{1,2})-(\d{2,4})/g)];
+  if (dateMatches.length > 0) {
+    const match = dateMatches[dateMatches.length - 1]; // take the last one
+    let [, month, day, year] = match;
+    if (year.length === 2) {
+      year = parseInt(year) > 50 ? "19" + year : "20" + year;
+    }
+    const m = parseInt(month);
+    const d = parseInt(day);
+    const y = parseInt(year);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31 && y >= 2000 && y <= 2030) {
+      return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    }
+  }
+
+  // Pattern 2: compact 4-digit MMDD at end, e.g. "Part 2 1215"
+  const compactMatch = title.match(/\b(\d{2})(\d{2})\s*$/);
+  if (compactMatch) {
+    const m = parseInt(compactMatch[1]);
+    const d = parseInt(compactMatch[2]);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      const yearMatch = title.match(/\b(20\d{2})\b/);
+      if (yearMatch) {
+        return `${yearMatch[1]}-${compactMatch[1]}-${compactMatch[2]}`;
+      }
+    }
+  }
+
+  // Pattern 2b: compact 5-6 digit MDDYY or MMDDYY, e.g. "52413" = May 24, 2013, "101813"
+  const compact6 = title.match(/\b(\d{5,6})\b/);
+  if (compact6) {
+    const s = compact6[1];
+    let m: number, d: number, yy: number;
+    if (s.length === 5) {
+      m = parseInt(s[0]);
+      d = parseInt(s.slice(1, 3));
+      yy = parseInt(s.slice(3));
+    } else {
+      m = parseInt(s.slice(0, 2));
+      d = parseInt(s.slice(2, 4));
+      yy = parseInt(s.slice(4));
+    }
+    const year = yy > 50 ? 1900 + yy : 2000 + yy;
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31 && year >= 2000 && year <= 2030) {
+      return `${year}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    }
+  }
+
+  // Pattern 2c: M/D/YY or M/D/YYYY with slashes, e.g. "2/21/00"
+  const slashMatch = title.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (slashMatch) {
+    let [, month, day, year] = slashMatch;
+    if (year.length === 2) {
+      year = parseInt(year) > 50 ? "19" + year : "20" + year;
+    }
+    const m2 = parseInt(month);
+    const d2 = parseInt(day);
+    if (m2 >= 1 && m2 <= 12 && d2 >= 1 && d2 <= 31) {
+      return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    }
+  }
+
+  // Pattern 2d: "Month D, YYYY" e.g. "Feb 1, 2019" or "Jan 7"
+  const MONTHS: Record<string, string> = {
+    jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+    jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+  };
+  const namedMatch = title.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/i);
+  if (namedMatch) {
+    const mon = MONTHS[namedMatch[1].toLowerCase()];
+    const day = namedMatch[2].padStart(2, "0");
+    let year: string | undefined = namedMatch[3];
+    if (!year) {
+      const yearMatch = title.match(/\b(20\d{2})\b/);
+      year = yearMatch?.[1];
+    }
+    if (mon && year) {
+      return `${year}-${mon}-${day}`;
+    }
+  }
+
+  // Pattern 3: "Best of YYYY" or "Best Songs of YYYY" — use Jan 1 of following year
+  const bestOfMatch = title.match(/Best\s+(?:Songs?\s+)?of\s+(20\d{2})/i);
+  if (bestOfMatch) {
+    const year = parseInt(bestOfMatch[1]) + 1;
+    return `${year}-01-01`;
+  }
+
+  // Pattern 4: "Top albums YYYY" — use Dec 31 of that year
+  const topAlbumsMatch = title.match(/Top\s+albums?\s+(20\d{2})/i);
+  if (topAlbumsMatch) {
+    return `${topAlbumsMatch[1]}-12-31`;
+  }
+
+  return null;
+}
+
+// Backfill: parse dates from titles for all episodes with fallback date
+export const backfillEpisodeDates = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const episodes = await ctx.db.query("episodes").collect();
+    const fallbackDate = "2020-01-01";
+
+    let fixed = 0;
+    let unfixable = 0;
+    const unfixableList: Array<{ id: string; title: string }> = [];
+
+    for (const ep of episodes) {
+      if (ep.airDate !== fallbackDate) continue;
+
+      // Skip "Notes" episodes — these are show notes, not full episodes
+      if (/\bNotes\b/i.test(ep.title)) {
+        unfixable++;
+        unfixableList.push({ id: ep._id, title: ep.title });
+        continue;
+      }
+
+      const parsed = parseDateFromTitle(ep.title);
+      if (parsed) {
+        await ctx.db.patch(ep._id, {
+          airDate: parsed,
+          airDateTimestamp: new Date(parsed).getTime(),
+          updatedAt: Date.now(),
+        });
+        fixed++;
+      } else {
+        unfixable++;
+        unfixableList.push({ id: ep._id, title: ep.title });
+      }
+    }
+
+    return {
+      fixed,
+      unfixable,
+      unfixableList: unfixableList.slice(0, 50), // return first 50 for review
+    };
+  },
+});

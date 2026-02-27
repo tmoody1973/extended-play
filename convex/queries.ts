@@ -316,6 +316,63 @@ export const getCommunityArtists = query({
 });
 
 // ═══════════════════════════════════════════════════════════════
+//  TEMPORAL EXPLORER — Date-based browsing and graph filtering
+// ═══════════════════════════════════════════════════════════════
+
+// Lightweight episode summary for the date browser
+export const getEpisodeDateSummary = query({
+  handler: async (ctx) => {
+    const episodes = await ctx.db
+      .query("episodes")
+      .withIndex("by_airDate")
+      .order("desc")
+      .collect();
+    return episodes.map((ep) => ({
+      _id: ep._id,
+      title: ep.title,
+      airDate: ep.airDate,
+      airDateTimestamp: ep.airDateTimestamp,
+      trackCount: ep.trackCount,
+    }));
+  },
+});
+
+// Get all artist IDs that appeared in episodes within a date range
+export const getArtistIdsByDateRange = query({
+  args: {
+    startTimestamp: v.number(),
+    endTimestamp: v.number(),
+  },
+  handler: async (ctx, { startTimestamp, endTimestamp }) => {
+    const episodes = await ctx.db
+      .query("episodes")
+      .withIndex("by_airDate")
+      .filter((q) =>
+        q.and(
+          q.gte(q.field("airDateTimestamp"), startTimestamp),
+          q.lte(q.field("airDateTimestamp"), endTimestamp)
+        )
+      )
+      .collect();
+
+    const artistIds = new Set<string>();
+    for (const ep of episodes) {
+      const tracks = await ctx.db
+        .query("tracks")
+        .withIndex("by_episodeId", (q) => q.eq("episodeId", ep._id))
+        .collect();
+      for (const t of tracks) {
+        artistIds.add(t.artistId as string);
+      }
+    }
+    return {
+      artistIds: Array.from(artistIds),
+      episodeCount: episodes.length,
+    };
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════
 //  ENRICHMENT STATUS (for admin dashboard / progress tracking)
 // ═══════════════════════════════════════════════════════════════
 

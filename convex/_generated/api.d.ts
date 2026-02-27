@@ -11,6 +11,7 @@
 import type * as admin from "../admin.js";
 import type * as crons from "../crons.js";
 import type * as enrichment from "../enrichment.js";
+import type * as geminiGrounding from "../geminiGrounding.js";
 import type * as ingest from "../ingest.js";
 import type * as playlists from "../playlists.js";
 import type * as queries from "../queries.js";
@@ -26,6 +27,7 @@ declare const fullApi: ApiFromModules<{
   admin: typeof admin;
   crons: typeof crons;
   enrichment: typeof enrichment;
+  geminiGrounding: typeof geminiGrounding;
   ingest: typeof ingest;
   playlists: typeof playlists;
   queries: typeof queries;

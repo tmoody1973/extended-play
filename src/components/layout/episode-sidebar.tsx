@@ -1,91 +1,27 @@
 "use client";
 
-import { useQuery } from "convex/react";
-import { api } from "../../../convex/_generated/api";
-import { cn } from "@/lib/utils";
 import { Id } from "../../../convex/_generated/dataModel";
+import { EpisodeBrowser } from "@/components/sidebar/episode-browser";
 
 interface EpisodeSidebarProps {
-  episodeId?: Id<"episodes">;
-  onEpisodeSelect?: (episodeId: Id<"episodes"> | undefined) => void;
-  onTrackSelect?: (trackId: Id<"tracks">, artistId: Id<"artists">) => void;
+  onEpisodeSelect: (episodeId: Id<"episodes"> | undefined) => void;
+  onTrackSelect: (trackId: Id<"tracks">, artistId: Id<"artists">) => void;
+  onTimeRangeSelect: (range: { startTimestamp: number; endTimestamp: number } | undefined) => void;
+  activeTimeRange?: { startTimestamp: number; endTimestamp: number };
 }
 
-export function EpisodeSidebar({ episodeId, onEpisodeSelect, onTrackSelect }: EpisodeSidebarProps) {
-  const episodes = useQuery(api.queries.listEpisodes, { limit: 500 });
-  const episodeWithTracks = useQuery(
-    api.queries.getEpisodeWithTracks,
-    episodeId ? { episodeId } : "skip"
-  );
-
+export function EpisodeSidebar({
+  onEpisodeSelect,
+  onTrackSelect,
+  onTimeRangeSelect,
+  activeTimeRange,
+}: EpisodeSidebarProps) {
   return (
-    <div className="h-full flex flex-col p-3 bg-walnut">
-      {episodeId && (
-        <button
-          onClick={() => onEpisodeSelect?.(undefined)}
-          className="flex items-center gap-1 text-amber text-xs mb-2 px-1 hover:text-cream transition-colors"
-        >
-          <span>←</span> <span>All Episodes</span>
-        </button>
-      )}
-      <h3 className="font-editorial text-cream text-sm mb-3 px-1 truncate">
-        {episodeWithTracks?.title || "Episodes"}
-      </h3>
-
-      {!episodeId && episodes && (
-        <div className="space-y-1 overflow-y-auto">
-          {episodes.map((ep) => (
-            <button
-              key={ep._id}
-              onClick={() => onEpisodeSelect?.(ep._id)}
-              className="w-full text-left p-2 rounded hover:bg-shelf transition-colors"
-            >
-              <p className="text-cream text-sm truncate">{ep.title}</p>
-              <p className="text-shadow text-xs font-data">{ep.airDate}</p>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {episodeWithTracks?.tracks && (
-        <div className="space-y-0.5 overflow-y-auto flex-1">
-          {episodeWithTracks.tracks.map((track, i) => (
-            <button
-              key={track._id}
-              onClick={() => onTrackSelect?.(track._id, track.artistId)}
-              className={cn(
-                "w-full flex items-center gap-2 p-1.5 rounded transition-colors",
-                "hover:bg-shelf cursor-pointer group"
-              )}
-            >
-              <span className="text-shadow font-data text-[10px] w-4 flex-shrink-0 text-right">
-                {i + 1}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-cream text-xs truncate group-hover:text-amber transition-colors">
-                  {track.title}
-                </p>
-                <p className="text-sleeve text-[10px] truncate">{track.artistName}</p>
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {!episodes && !episodeWithTracks && (
-        <div className="space-y-2 p-2">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <div key={i} className="flex items-center gap-2.5 animate-pulse">
-              <div className="w-5 h-3 rounded bg-shelf" />
-              <div className="w-8 h-8 rounded bg-shelf" />
-              <div className="flex-1 space-y-1">
-                <div className="h-3 rounded bg-shelf w-3/4" />
-                <div className="h-2.5 rounded bg-shelf w-1/2" />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+    <EpisodeBrowser
+      onEpisodeSelect={onEpisodeSelect}
+      onTrackSelect={onTrackSelect}
+      onTimeRangeSelect={onTimeRangeSelect}
+      activeTimeRange={activeTimeRange}
+    />
   );
 }

@@ -656,6 +656,11 @@ export const processEnrichmentQueue = internalAction({
               artistId: job.targetId as any,
             });
             break;
+          case "gemini_grounding":
+            await ctx.runAction(internal.geminiGrounding.enrichArtistWithGrounding, {
+              artistId: job.targetId as any,
+            });
+            break;
         }
 
         await ctx.runMutation(internal.enrichment.updateJobStatus, {

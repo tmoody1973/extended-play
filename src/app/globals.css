@@ -140,3 +140,17 @@
   0% { opacity: 0; transform: translateY(12px); }
   100% { opacity: 1; transform: translateY(0); }
 }
+
+/* Temporal Explorer — heatmap glow utilities */
+.heatmap-glow-low {
+  box-shadow: 0 0 4px rgba(212, 160, 84, 0.15);
+}
+.heatmap-glow-mid {
+  box-shadow: 0 0 8px rgba(212, 160, 84, 0.3);
+}
+.heatmap-glow-high {
+  box-shadow: 0 0 12px rgba(212, 160, 84, 0.5), 0 0 4px rgba(212, 160, 84, 0.3);
+}
+.heatmap-glow-max {
+  box-shadow: 0 0 16px rgba(212, 160, 84, 0.6), 0 0 6px rgba(212, 160, 84, 0.4);
+}
