@@ -8,6 +8,7 @@ import { useForceGraph, GraphNode, GraphEdge } from "./use-force-graph";
 interface InfluenceMapProps {
   onNodeClick?: (artistId: string) => void;
   highlightedNodeId?: string;
+  filterArtistIds?: Set<string>; // When set, only show these artists
 }
 
 // Demo data for when Convex has no graph snapshot yet
@@ -34,7 +35,7 @@ const demoEdges: GraphEdge[] = [
   { source: "3", target: "7", weight: 1 },
 ];
 
-export function InfluenceMap({ onNodeClick, highlightedNodeId }: InfluenceMapProps) {
+export function InfluenceMap({ onNodeClick, highlightedNodeId, filterArtistIds }: InfluenceMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
 
@@ -43,7 +44,7 @@ export function InfluenceMap({ onNodeClick, highlightedNodeId }: InfluenceMapPro
   const graphSnapshot = useQuery((api as any).queries.getActiveGraph);
 
   // Use real data if available, otherwise demo
-  const nodes: GraphNode[] = graphSnapshot
+  const allNodes: GraphNode[] = graphSnapshot
     ? JSON.parse(graphSnapshot.nodesJson).map((n: any) => ({
         id: n.id,
         name: n.name,
@@ -52,13 +53,23 @@ export function InfluenceMap({ onNodeClick, highlightedNodeId }: InfluenceMapPro
       }))
     : demoNodes;
 
-  const edges: GraphEdge[] = graphSnapshot
+  const allEdges: GraphEdge[] = graphSnapshot
     ? JSON.parse(graphSnapshot.edgesJson).map((e: any) => ({
         source: e.source,
         target: e.target,
         weight: e.w ?? e.weight,
       }))
     : demoEdges;
+
+  // Filter to episode artists if a filter is active
+  const nodes = filterArtistIds
+    ? allNodes.filter((n) => filterArtistIds.has(n.id))
+    : allNodes;
+
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const edges = allEdges.filter(
+    (e) => nodeIds.has(e.source as string) && nodeIds.has(e.target as string)
+  );
 
   // Observe container size
   useEffect(() => {

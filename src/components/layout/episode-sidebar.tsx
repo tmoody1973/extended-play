@@ -7,11 +7,12 @@ import { Id } from "../../../convex/_generated/dataModel";
 
 interface EpisodeSidebarProps {
   episodeId?: Id<"episodes">;
+  onEpisodeSelect?: (episodeId: Id<"episodes"> | undefined) => void;
   onTrackSelect?: (trackId: Id<"tracks">, artistId: Id<"artists">) => void;
 }
 
-export function EpisodeSidebar({ episodeId, onTrackSelect }: EpisodeSidebarProps) {
-  const episodes = useQuery(api.queries.listEpisodes, { limit: 20 });
+export function EpisodeSidebar({ episodeId, onEpisodeSelect, onTrackSelect }: EpisodeSidebarProps) {
+  const episodes = useQuery(api.queries.listEpisodes, { limit: 500 });
   const episodeWithTracks = useQuery(
     api.queries.getEpisodeWithTracks,
     episodeId ? { episodeId } : "skip"
@@ -19,15 +20,26 @@ export function EpisodeSidebar({ episodeId, onTrackSelect }: EpisodeSidebarProps
 
   return (
     <div className="h-full flex flex-col p-3 bg-walnut">
-      <h3 className="font-editorial text-cream text-base mb-3 px-1">
-        {episodeWithTracks?.title || "Episodes"}
-      </h3>
+      <div className="flex items-center justify-between mb-3 px-1">
+        <h3 className="font-editorial text-cream text-base">
+          {episodeWithTracks?.title || "Episodes"}
+        </h3>
+        {episodeId && (
+          <button
+            onClick={() => onEpisodeSelect?.(undefined)}
+            className="text-shadow text-xs hover:text-amber transition-colors"
+          >
+            ← All
+          </button>
+        )}
+      </div>
 
       {!episodeId && episodes && (
         <div className="space-y-1 overflow-y-auto">
           {episodes.map((ep) => (
             <button
               key={ep._id}
+              onClick={() => onEpisodeSelect?.(ep._id)}
               className="w-full text-left p-2 rounded hover:bg-shelf transition-colors"
             >
               <p className="text-cream text-sm truncate">{ep.title}</p>

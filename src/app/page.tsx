@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
+import { useQuery } from "convex/react";
+import { api } from "../../convex/_generated/api";
 import { AppShell } from "@/components/layout/app-shell";
 import { MainLayout } from "@/components/layout/main-layout";
 import { VoiceBar } from "@/components/voice/voice-bar";
@@ -18,6 +20,18 @@ export default function Home() {
   const [selectedArtistId, setSelectedArtistId] = useState<string | undefined>();
   const [storyItems, setStoryItems] = useState<AgentEvent[]>([]);
   const [highlightedNodeId, setHighlightedNodeId] = useState<string | undefined>();
+
+  // When an episode is selected, get its tracks to filter the graph
+  const episodeWithTracks = useQuery(
+    api.queries.getEpisodeWithTracks,
+    selectedEpisodeId ? { episodeId: selectedEpisodeId } : "skip"
+  );
+
+  // Build set of artist IDs from selected episode
+  const filterArtistIds = useMemo(() => {
+    if (!episodeWithTracks?.tracks) return undefined;
+    return new Set(episodeWithTracks.tracks.map((t: any) => t.artistId));
+  }, [episodeWithTracks]);
 
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
@@ -71,6 +85,7 @@ export default function Home() {
         sidebar={
           <EpisodeSidebar
             episodeId={selectedEpisodeId}
+            onEpisodeSelect={setSelectedEpisodeId}
             onTrackSelect={handleTrackSelect}
           />
         }
@@ -78,6 +93,7 @@ export default function Home() {
           <InfluenceMap
             onNodeClick={handleNodeClick}
             highlightedNodeId={highlightedNodeId}
+            filterArtistIds={filterArtistIds}
           />
         }
         stream={<StoryStream items={storyItems} />}
