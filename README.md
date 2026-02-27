@@ -16,6 +16,7 @@ Built for the [Google Cloud Gemini Live Agent Challenge](https://googlecloudgena
 - **Episode Sidebar** — Browse 20 years of Rhythm Lab Radio episodes and tracklists
 - **Playlist Builder** — Curate tracks as you explore, export to Spotify, Apple Music, YouTube Music, or .m3u
 - **Enrichment Pipeline** — Automatic metadata from MusicBrainz, Discogs, Fanart.tv, Cover Art Archive, and ReccoBeats
+- **Multi-Source Connection Pipeline** — Builds influence edges from 5 sources: MusicBrainz relationships, Discogs member/group data, Wikipedia associated acts, Gemini Grounding corpus seeding, and Exa/Tavily review search with NER co-mention extraction (Stell-R methodology)
 - **Admin Dashboard** — Paste-to-ingest playlist parser with enrichment status monitoring
 - **Reactive Data** — All UI updates in real-time via Convex subscriptions, zero polling
 
@@ -75,8 +76,15 @@ Navigate to [http://localhost:3000/admin](http://localhost:3000/admin) to paste 
 |----------|-------------|----------|
 | `CONVEX_DEPLOYMENT` | Convex deployment identifier (auto-generated) | Yes |
 | `NEXT_PUBLIC_CONVEX_URL` | Convex cloud URL for client (auto-generated) | Yes |
+| `DISCOGS_KEY` / `DISCOGS_SECRET` | Discogs API credentials | For enrichment |
+| `FANART_TV_API_KEY` | Fanart.tv API key | For enrichment |
+| `YOUTUBE_API_KEY` | YouTube Data API v3 key | For enrichment |
+| `RECCOBEATS_API_KEY` | ReccoBeats API key (sonic features) | For enrichment |
+| `EXA_API_KEY` | Exa AI API key (semantic review search) | For corpus seeding |
+| `TAVILY_API_KEY` | Tavily API key (fallback review search) | For corpus seeding |
+| `GOOGLE_CLOUD_PROJECT` | GCP project ID for Vertex AI | For Gemini grounding |
 
-Both are created automatically when you run `npx convex dev`.
+Convex vars are auto-created by `npx convex dev`. Set enrichment API keys in the Convex dashboard under Environment Variables.
 
 ## Project Structure
 
@@ -85,11 +93,12 @@ extended-play/
 ├── convex/                    # Backend (runs on Convex)
 │   ├── schema.ts              # 12-table data model
 │   ├── queries.ts             # Graph, artist, episode queries
-│   ├── enrichment.ts          # 4-layer metadata pipeline
+│   ├── enrichment.ts          # Enrichment pipeline + NER + connection utilities
 │   ├── ingest.ts              # Episode + tracklist ingestion
 │   ├── admin.ts               # Admin dashboard functions
 │   ├── playlists.ts           # Playlist CRUD + export
-│   ├── reviewSearch.ts        # Music journalism search + NER
+│   ├── reviewSearch.ts        # Music journalism search (Exa/Tavily) + corpus seeding
+│   ├── geminiGrounding.ts     # Gemini Grounding metadata + corpus seeding
 │   └── crons.ts               # Scheduled enrichment processing
 ├── src/
 │   ├── app/
@@ -122,8 +131,30 @@ The Convex schema models the full music knowledge graph:
 - **communities** — Leiden-detected genre clusters with aggregate sonic profiles
 - **playlists** — User-curated collections with export tracking
 - **conversations** / **messages** — Voice/text chat history with rich attachments
-- **enrichmentJobs** — Pipeline task queue with priority, retry, and status tracking
+- **enrichmentJobs** — Pipeline task queue with priority, retry, and status tracking (16 job types: MB lookup/rels, Discogs, Genius, Fanart.tv, Wikimedia, Cover Art Archive, ReccoBeats, AcousticBrainz, YouTube, NER extraction, sonic profile, graph metrics, Gemini grounding/corpus, Wikipedia, review corpus)
 - **graphSnapshots** — Serialized graph state for frontend rendering
+
+## Enrichment Pipeline
+
+After playlist ingestion, artists flow through a multi-layer enrichment pipeline powered by the Convex cron scheduler:
+
+**Layer 0** — Ingest: episode + tracklist → artist stubs + playlist-adjacent edges
+**Layer 1** — Identify: MusicBrainz lookup → MBID, country, genres
+**Layer 1b** — MusicBrainz relationships → collaboration, shared_member edges
+**Layer 2** — Metadata: Discogs (images, bio, members/groups/aliases), Fanart.tv, YouTube, Genius
+**Layer 2b** — Corpus seeding: Wikipedia bio/influences, Exa/Tavily review search, Gemini Grounding (interviews/features)
+**Layer 3** — Sonic: ReccoBeats/AcousticBrainz audio features → artist sonic profiles
+**NER** — Co-mention extraction from review corpus → `review_comention` edges (Stell-R methodology)
+
+Connection types and base weights:
+
+| Type | Weight | Source |
+|------|--------|--------|
+| `collaboration` | 0.7 | MusicBrainz rels, Wikipedia |
+| `shared_member` | 0.5 | MusicBrainz, Discogs members/groups |
+| `review_comention` | 0.3–0.5 | NER from reviews (0.5 for influence-context) |
+| `same_label` | 0.2 | Discogs |
+| `playlist_adjacent` | 1.0 | Rhythm Lab Radio playlists |
 
 ## Design System
 
@@ -165,6 +196,7 @@ Responsive: 3 columns on desktop, 2 on tablet, 1 on mobile.
 | `npx convex dev` | Start Convex dev server (run alongside) |
 | `npm run build` | Production build |
 | `npm run lint` | Run ESLint |
+| `npx tsx scripts/test-ner.ts` | Run NER extraction unit tests |
 
 ## License
 
