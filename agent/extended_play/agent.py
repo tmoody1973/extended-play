@@ -1,6 +1,9 @@
 from google.adk.agents import Agent
 from .prompts import SYSTEM_INSTRUCTION
 from .tools.graph import explore_artist, get_connections, search_artists, get_bridge_artists
+from .tools.episodes import list_episodes, get_episode
+from .tools.reviews import search_reviews
+from .tools.playlists import create_playlist, add_to_playlist
 
 root_agent = Agent(
     model="gemini-2.0-flash-live-001",
@@ -12,5 +15,10 @@ root_agent = Agent(
         get_connections,
         search_artists,
         get_bridge_artists,
+        list_episodes,
+        get_episode,
+        search_reviews,
+        create_playlist,
+        add_to_playlist,
     ],
 )
