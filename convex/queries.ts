@@ -4,6 +4,7 @@
 
 import { v } from "convex/values";
 import { query } from "./_generated/server";
+import { Doc } from "./_generated/dataModel";
 
 // ═══════════════════════════════════════════════════════════════
 //  GRAPH DATA — For D3 Force-Directed Influence Map
@@ -38,7 +39,7 @@ export const getArtistSubgraph = query({
       if (visited.has(id.toString()) || currentDepth > depth) continue;
       visited.add(id.toString());
 
-      const artist = await ctx.db.get(id);
+      const artist = await ctx.db.get(id) as Doc<"artists"> | null;
       if (!artist) continue;
 
       nodes.push({

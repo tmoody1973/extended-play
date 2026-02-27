@@ -8,13 +8,29 @@
  * @module
  */
 
+import type * as admin from "../admin.js";
+import type * as crons from "../crons.js";
+import type * as enrichment from "../enrichment.js";
+import type * as ingest from "../ingest.js";
+import type * as playlists from "../playlists.js";
+import type * as queries from "../queries.js";
+import type * as reviewSearch from "../reviewSearch.js";
+
 import type {
   ApiFromModules,
   FilterApi,
   FunctionReference,
 } from "convex/server";
 
-declare const fullApi: ApiFromModules<{}>;
+declare const fullApi: ApiFromModules<{
+  admin: typeof admin;
+  crons: typeof crons;
+  enrichment: typeof enrichment;
+  ingest: typeof ingest;
+  playlists: typeof playlists;
+  queries: typeof queries;
+  reviewSearch: typeof reviewSearch;
+}>;
 
 /**
  * A utility for referencing Convex functions in your app's public API.

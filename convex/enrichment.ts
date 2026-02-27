@@ -8,6 +8,7 @@ import {
   action,
   internalAction,
   internalMutation,
+  internalQuery,
   query,
   mutation,
 } from "./_generated/server";
@@ -604,7 +605,7 @@ export const processEnrichmentQueue = internalAction({
   args: {
     batchSize: v.optional(v.number()),
   },
-  handler: async (ctx, { batchSize = 10 }) => {
+  handler: async (ctx, { batchSize = 10 }): Promise<{ processed: number }> => {
     // Get next batch of queued jobs, highest priority first
     const jobs = await ctx.runQuery(internal.enrichment.getQueuedJobs, {
       limit: batchSize,
@@ -686,7 +687,7 @@ export const processEnrichmentQueue = internalAction({
 // Enrich all artist stubs (Layer 1 — MusicBrainz identification)
 export const enrichAllStubArtists = action({
   args: {},
-  handler: async (ctx) => {
+  handler: async (ctx): Promise<{ queued: number }> => {
     const stubs = await ctx.runQuery(internal.enrichment.getArtistsByStatus, {
       status: "stub",
       limit: 100,
@@ -709,7 +710,7 @@ export const enrichAllStubArtists = action({
 // Enrich all tracks missing album art
 export const enrichAllTrackArt = action({
   args: {},
-  handler: async (ctx) => {
+  handler: async (ctx): Promise<{ queued: number }> => {
     const tracks = await ctx.runQuery(internal.enrichment.getTracksByStatus, {
       status: "raw",
       limit: 100,
@@ -733,17 +734,17 @@ export const enrichAllTrackArt = action({
 //  INTERNAL QUERIES & MUTATIONS (used by actions above)
 // ═══════════════════════════════════════════════════════════════
 
-export const getArtist = query({
+export const getArtist = internalQuery({
   args: { artistId: v.id("artists") },
   handler: async (ctx, { artistId }) => ctx.db.get(artistId),
 });
 
-export const getTrack = query({
+export const getTrack = internalQuery({
   args: { trackId: v.id("tracks") },
   handler: async (ctx, { trackId }) => ctx.db.get(trackId),
 });
 
-export const getArtistTracks = query({
+export const getArtistTracks = internalQuery({
   args: { artistId: v.id("artists") },
   handler: async (ctx, { artistId }) => {
     return await ctx.db
@@ -753,7 +754,7 @@ export const getArtistTracks = query({
   },
 });
 
-export const getArtistsByStatus = query({
+export const getArtistsByStatus = internalQuery({
   args: {
     status: v.string(),
     limit: v.optional(v.number()),
@@ -766,7 +767,7 @@ export const getArtistsByStatus = query({
   },
 });
 
-export const getTracksByStatus = query({
+export const getTracksByStatus = internalQuery({
   args: {
     status: v.string(),
     limit: v.optional(v.number()),
@@ -779,7 +780,7 @@ export const getTracksByStatus = query({
   },
 });
 
-export const getQueuedJobs = query({
+export const getQueuedJobs = internalQuery({
   args: { limit: v.number() },
   handler: async (ctx, { limit }) => {
     return await ctx.db

@@ -153,8 +153,8 @@ export const bulkIngestEpisodes = action({
       })
     ),
   },
-  handler: async (ctx, args) => {
-    const results = [];
+  handler: async (ctx, args): Promise<{ ingested: number; results: any[] }> => {
+    const results: any[] = [];
     for (const episode of args.episodes) {
       const result = await ctx.runMutation(internal.ingest.ingestEpisodeInternal, episode);
       results.push(result);
