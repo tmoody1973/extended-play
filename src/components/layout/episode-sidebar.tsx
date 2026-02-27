@@ -20,19 +20,17 @@ export function EpisodeSidebar({ episodeId, onEpisodeSelect, onTrackSelect }: Ep
 
   return (
     <div className="h-full flex flex-col p-3 bg-walnut">
-      <div className="flex items-center justify-between mb-3 px-1">
-        <h3 className="font-editorial text-cream text-base">
-          {episodeWithTracks?.title || "Episodes"}
-        </h3>
-        {episodeId && (
-          <button
-            onClick={() => onEpisodeSelect?.(undefined)}
-            className="text-shadow text-xs hover:text-amber transition-colors"
-          >
-            ← All
-          </button>
-        )}
-      </div>
+      {episodeId && (
+        <button
+          onClick={() => onEpisodeSelect?.(undefined)}
+          className="flex items-center gap-1 text-amber text-xs mb-2 px-1 hover:text-cream transition-colors"
+        >
+          <span>←</span> <span>All Episodes</span>
+        </button>
+      )}
+      <h3 className="font-editorial text-cream text-sm mb-3 px-1 truncate">
+        {episodeWithTracks?.title || "Episodes"}
+      </h3>
 
       {!episodeId && episodes && (
         <div className="space-y-1 overflow-y-auto">
@@ -56,30 +54,19 @@ export function EpisodeSidebar({ episodeId, onEpisodeSelect, onTrackSelect }: Ep
               key={track._id}
               onClick={() => onTrackSelect?.(track._id, track.artistId)}
               className={cn(
-                "w-full flex items-center gap-2.5 p-2 rounded transition-colors",
+                "w-full flex items-center gap-2 p-1.5 rounded transition-colors",
                 "hover:bg-shelf cursor-pointer group"
               )}
             >
-              <span className="text-shadow font-data text-xs w-5 flex-shrink-0">
-                {String(i + 1).padStart(2, "0")}
+              <span className="text-shadow font-data text-[10px] w-4 flex-shrink-0 text-right">
+                {i + 1}
               </span>
-              <div
-                className="w-8 h-8 rounded bg-shelf flex-shrink-0 bg-cover bg-center"
-                style={
-                  track.albumArtUrl
-                    ? { backgroundImage: `url(${track.albumArtUrl})` }
-                    : undefined
-                }
-              />
               <div className="min-w-0 flex-1">
-                <p className="text-cream text-sm truncate group-hover:text-amber transition-colors">
+                <p className="text-cream text-xs truncate group-hover:text-amber transition-colors">
                   {track.title}
                 </p>
-                <p className="text-sleeve text-xs truncate">{track.artistName}</p>
+                <p className="text-sleeve text-[10px] truncate">{track.artistName}</p>
               </div>
-              {track.enrichmentStatus !== "complete" && (
-                <div className="w-1.5 h-1.5 rounded-full bg-amber animate-vu-pulse flex-shrink-0" />
-              )}
             </button>
           ))}
         </div>
