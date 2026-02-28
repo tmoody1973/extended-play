@@ -171,6 +171,11 @@
   100% { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 /* Temporal Explorer — heatmap glow utilities */
 .heatmap-glow-low {
   box-shadow: 0 0 4px rgba(220, 165, 74, 0.15);
@@ -183,4 +188,30 @@
 }
 .heatmap-glow-max {
   box-shadow: 0 0 16px rgba(220, 165, 74, 0.6), 0 0 6px rgba(220, 165, 74, 0.4);
+}
+
+/* ═══ Graph Animations ═══ */
+
+/* Selected node pulse */
+@keyframes node-pulse {
+  0%, 100% { filter: drop-shadow(0 0 4px rgba(220, 165, 74, 0.4)); }
+  50% { filter: drop-shadow(0 0 12px rgba(220, 165, 74, 0.8)); }
+}
+
+.graph-node-selected {
+  animation: node-pulse 2s ease-in-out infinite;
+}
+
+/* Edge glow on hover */
+.graph-edge {
+  transition: stroke-opacity 300ms ease, stroke 300ms ease, stroke-width 300ms ease;
+}
+
+/* Hide scrollbar for connected artists horizontal scroll */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }

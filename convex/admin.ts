@@ -3,7 +3,7 @@
 // These power the admin dashboard for managing the knowledge graph
 
 import { v } from "convex/values";
-import { mutation, action, internalMutation } from "./_generated/server";
+import { mutation, action, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 
 // ═══════════════════════════════════════════════════════════════
@@ -714,72 +714,132 @@ export const forceReenrichArtist = mutation({
   },
 });
 
+// Re-enrich all artists that already have MusicBrainz IDs but are missing images
+// Queues only image-related steps; the cron picks them up rate-limited
+export const reEnrichAllArtistImages = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const imageSteps = ["discogs_fetch", "fanart_tv_fetch"];
+
+    // Collect artists past the stub stage (they already have MBIDs)
+    const identified = await ctx.db
+      .query("artists")
+      .withIndex("by_enrichmentStatus", (q) => q.eq("enrichmentStatus", "identified"))
+      .collect();
+    const metadata = await ctx.db
+      .query("artists")
+      .withIndex("by_enrichmentStatus", (q) => q.eq("enrichmentStatus", "metadata"))
+      .collect();
+    const complete = await ctx.db
+      .query("artists")
+      .withIndex("by_enrichmentStatus", (q) => q.eq("enrichmentStatus", "complete"))
+      .collect();
+
+    const allArtists = [...identified, ...metadata, ...complete];
+
+    // Only queue for artists missing a primary image
+    const needsImages = allArtists.filter(
+      (a) => !a.images?.primary?.url
+    );
+
+    let queued = 0;
+    for (const artist of needsImages) {
+      for (const step of imageSteps) {
+        await ctx.db.insert("enrichmentJobs", {
+          targetType: "artist",
+          targetId: artist._id.toString(),
+          targetName: artist.name,
+          step: step as any,
+          priority: "normal",
+          status: "queued",
+          attempts: 0,
+          maxAttempts: 3,
+          scheduledAt: now,
+          createdAt: now,
+        });
+      }
+      queued++;
+    }
+
+    return {
+      totalArtists: allArtists.length,
+      needingImages: needsImages.length,
+      jobsQueued: needsImages.length * imageSteps.length,
+    };
+  },
+});
+
 // ═══════════════════════════════════════════════════════════════
 //  GRAPH SNAPSHOT BUILDER
 //  Collects all artists + connections → serialized JSON for D3
 // ═══════════════════════════════════════════════════════════════
 
-export const buildGraphSnapshot = mutation({
+// --- Internal paginated helpers for graph snapshot builder ---
+
+/** Read all connections in pages (lightweight docs, ~3 fields each) */
+export const _getConnectionsPage = internalQuery({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, { cursor }) => {
+    const result = await ctx.db
+      .query("artistConnections")
+      .paginate({ numItems: 5000, cursor: cursor ?? null });
+    return {
+      items: result.page.map((c) => ({
+        src: c.sourceArtistId,
+        tgt: c.targetArtistId,
+        w: c.weight,
+      })),
+      cursor: result.continueCursor,
+      isDone: result.isDone,
+    };
+  },
+});
+
+/** Read a page of artists — only the fields needed for graph nodes */
+export const _getArtistsPage = internalQuery({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, { cursor }) => {
+    const result = await ctx.db
+      .query("artists")
+      .paginate({ numItems: 500, cursor: cursor ?? null });
+    return {
+      items: result.page.map((a) => ({
+        id: a._id,
+        name: a.name,
+        communityId: a.communityId ?? 0,
+        bridgeScore: a.bridgeScore ?? 0,
+        imageUrl: a.images?.thumbnail?.url || a.images?.primary?.url || null,
+      })),
+      cursor: result.continueCursor,
+      isDone: result.isDone,
+    };
+  },
+});
+
+/** Save the computed snapshot (called from action) */
+export const _saveGraphSnapshot = internalMutation({
   args: {
     label: v.optional(v.string()),
-    minConnections: v.optional(v.number()), // Minimum connections to include (default 2)
+    nodesJson: v.string(),
+    edgesJson: v.string(),
+    imagesJson: v.string(),
+    nodeCount: v.number(),
+    edgeCount: v.number(),
   },
-  handler: async (ctx, { label, minConnections = 2 }) => {
+  handler: async (ctx, { label, nodesJson, edgesJson, imagesJson, nodeCount, edgeCount }) => {
     const now = Date.now();
-
-    // Collect all artists and connections
-    const allArtists = await ctx.db.query("artists").collect();
-    const allConnections = await ctx.db.query("artistConnections").collect();
-
-    // Count connections per artist
-    const connectionCount = new Map<string, number>();
-    for (const conn of allConnections) {
-      const src = conn.sourceArtistId.toString();
-      const tgt = conn.targetArtistId.toString();
-      connectionCount.set(src, (connectionCount.get(src) || 0) + 1);
-      connectionCount.set(tgt, (connectionCount.get(tgt) || 0) + 1);
-    }
-
-    // Filter to artists with enough connections
-    const includedIds = new Set<string>();
-    for (const [id, count] of connectionCount) {
-      if (count >= minConnections) includedIds.add(id);
-    }
-
-    const artists = allArtists.filter((a) => includedIds.has(a._id.toString()));
-
-    // Build compact nodes (minimal fields to stay under 1MB)
-    const nodes = artists.map((a, i) => ({
-      id: a._id,
-      name: a.name,
-      c: a.communityId ?? 0, // community (short key)
-      s: Math.max(3, (connectionCount.get(a._id.toString()) || 0)), // size = connection count
-      img: a.images?.thumbnail?.url || a.images?.primary?.url || undefined,
-    }));
-
-    // Filter edges to only included artists
-    const edges = allConnections
-      .filter((c) =>
-        includedIds.has(c.sourceArtistId.toString()) &&
-        includedIds.has(c.targetArtistId.toString())
-      )
-      .map((c) => ({
-        source: c.sourceArtistId,
-        target: c.targetArtistId,
-        w: c.weight, // short key
-      }));
 
     // Deactivate any existing active snapshot
     const activeSnapshot = await ctx.db
       .query("graphSnapshots")
       .withIndex("by_active", (q) => q.eq("isActive", true))
       .first();
-
     if (activeSnapshot) {
       await ctx.db.patch(activeSnapshot._id, { isActive: false });
     }
 
-    // Get next version number
+    // Get next version
     const latestSnapshot = await ctx.db
       .query("graphSnapshots")
       .withIndex("by_version")
@@ -787,26 +847,136 @@ export const buildGraphSnapshot = mutation({
       .first();
     const version = (latestSnapshot?.version ?? 0) + 1;
 
-    // Create new snapshot
+    // Helper: split JSON into chunks under 900KB
+    function chunkJson(json: string, field: "nodesJson" | "edgesJson" | "nodeImagesJson") {
+      const chunks: Array<Record<string, any>> = [];
+      if (json.length < 900_000) {
+        chunks.push({ [field]: json });
+      } else {
+        const arr = JSON.parse(json);
+        const entries = Array.isArray(arr) ? arr : Object.entries(arr);
+        const perChunk = Math.ceil(entries.length / Math.ceil(json.length / 800_000));
+        for (let i = 0; i < entries.length; i += perChunk) {
+          const slice = entries.slice(i, i + perChunk);
+          const value = Array.isArray(arr) ? slice : Object.fromEntries(slice);
+          chunks.push({ [field]: JSON.stringify(value) });
+        }
+      }
+      return chunks;
+    }
+
+    const nodesChunks = chunkJson(nodesJson, "nodesJson");
+    const edgesChunks = chunkJson(edgesJson, "edgesJson");
+    const imagesChunks = chunkJson(imagesJson, "nodeImagesJson");
+
     const snapshotId = await ctx.db.insert("graphSnapshots", {
       version,
       label: label ?? `v${version}-auto`,
-      nodeCount: nodes.length,
-      edgeCount: edges.length,
+      nodeCount,
+      edgeCount,
       communityCount: 0,
-      nodesJson: JSON.stringify(nodes),
-      edgesJson: JSON.stringify(edges),
+      nodesJson: nodesChunks[0].nodesJson,
+      edgesJson: edgesChunks[0].edgesJson,
       communitiesJson: JSON.stringify([]),
       isActive: true,
       createdAt: now,
     });
 
-    return {
-      snapshotId,
-      version,
+    for (let i = 1; i < nodesChunks.length; i++) {
+      await ctx.db.insert("graphSnapshots", {
+        version, label: `v${version}-nodes-${i}`, nodeCount: 0, edgeCount: 0, communityCount: 0,
+        nodesJson: nodesChunks[i].nodesJson, edgesJson: "[]", communitiesJson: "[]",
+        isActive: false, createdAt: now,
+      });
+    }
+    for (let i = 1; i < edgesChunks.length; i++) {
+      await ctx.db.insert("graphSnapshots", {
+        version, label: `v${version}-edges-${i}`, nodeCount: 0, edgeCount: 0, communityCount: 0,
+        nodesJson: "[]", edgesJson: edgesChunks[i].edgesJson, communitiesJson: "[]",
+        isActive: false, createdAt: now,
+      });
+    }
+    for (const chunk of imagesChunks) {
+      await ctx.db.insert("graphSnapshots", {
+        version, label: `v${version}-images`, nodeCount: 0, edgeCount: 0, communityCount: 0,
+        nodesJson: "[]", edgesJson: "[]", communitiesJson: "[]",
+        nodeImagesJson: chunk.nodeImagesJson,
+        isActive: false, createdAt: now,
+      });
+    }
+
+    return { snapshotId, version, nodeCount, edgeCount };
+  },
+});
+
+/** Build graph snapshot — action that paginates reads to avoid 16MB limit */
+export const buildGraphSnapshot = action({
+  args: {
+    label: v.optional(v.string()),
+    minConnections: v.optional(v.number()),
+  },
+  handler: async (ctx, { label, minConnections = 2 }): Promise<{ snapshotId: string; version: number; nodeCount: number; edgeCount: number }> => {
+    // Step 1: Paginate through all connections
+    const allConns: Array<{ src: string; tgt: string; w: number }> = [];
+    let cursor: string | undefined = undefined;
+    let done = false;
+    while (!done) {
+      const page: any = await ctx.runQuery(internal.admin._getConnectionsPage, { cursor });
+      allConns.push(...page.items);
+      cursor = page.cursor;
+      done = page.isDone;
+    }
+
+    // Step 2: Count connections per artist
+    const connectionCount = new Map<string, number>();
+    for (const conn of allConns) {
+      connectionCount.set(conn.src, (connectionCount.get(conn.src) || 0) + 1);
+      connectionCount.set(conn.tgt, (connectionCount.get(conn.tgt) || 0) + 1);
+    }
+
+    const includedIds = new Set<string>();
+    for (const [id, count] of connectionCount) {
+      if (count >= minConnections) includedIds.add(id);
+    }
+
+    // Step 3: Paginate through artists, keep only included ones
+    const nodes: Array<{ id: string; name: string; c: number; s: number; bs: number }> = [];
+    const nodeImages: Record<string, string> = {};
+    cursor = undefined;
+    done = false;
+    while (!done) {
+      const page: any = await ctx.runQuery(internal.admin._getArtistsPage, { cursor });
+      for (const a of page.items) {
+        if (!includedIds.has(a.id)) continue;
+        nodes.push({
+          id: a.id,
+          name: a.name,
+          c: a.communityId,
+          s: Math.max(3, connectionCount.get(a.id) || 0),
+          bs: a.bridgeScore,
+        });
+        if (a.imageUrl) nodeImages[a.id] = a.imageUrl;
+      }
+      cursor = page.cursor;
+      done = page.isDone;
+    }
+
+    // Step 4: Filter edges to included artists
+    const edges = allConns
+      .filter((c) => includedIds.has(c.src) && includedIds.has(c.tgt))
+      .map((c) => ({ source: c.src, target: c.tgt, w: c.w }));
+
+    // Step 5: Save via mutation
+    const result = await ctx.runMutation(internal.admin._saveGraphSnapshot, {
+      label,
+      nodesJson: JSON.stringify(nodes),
+      edgesJson: JSON.stringify(edges),
+      imagesJson: JSON.stringify(nodeImages),
       nodeCount: nodes.length,
       edgeCount: edges.length,
-    };
+    });
+
+    return result;
   },
 });
 

@@ -147,7 +147,7 @@ export default defineSchema({
         mode: v.optional(v.number()), // 0 = minor, 1 = major
       })
     ),
-    sonicProfileSource: v.optional(v.string()), // "reccobeats" | "acousticbrainz"
+    sonicProfileSource: v.optional(v.string()), // "soundstat" | "acousticbrainz"
     sonicProfileTrackCount: v.optional(v.number()), // How many tracks averaged
 
     // --- Graph Metrics (computed during graph finalization) ---
@@ -233,6 +233,7 @@ export default defineSchema({
     youtubeVideoId: v.optional(v.string()), // Best match music video
     youtubeVideoTitle: v.optional(v.string()),
     spotifyTrackId: v.optional(v.string()),
+    spotifyPreviewUrl: v.optional(v.string()), // 30s audio preview MP3
     appleMusicTrackId: v.optional(v.string()),
 
     // --- Sonic Features (track-level, contributes to artist profile) ---
@@ -594,7 +595,7 @@ export default defineSchema({
       v.literal("fanart_tv_fetch"),
       v.literal("wikimedia_fetch"),
       v.literal("cover_art_archive"),
-      v.literal("reccobeats_fetch"),
+      v.literal("soundstat_fetch"),
       v.literal("acousticbrainz_fetch"),
       v.literal("youtube_match"),
       v.literal("ner_extraction"),
@@ -647,9 +648,10 @@ export default defineSchema({
 
     // --- Serialized graph data for D3 frontend ---
     // Stored as JSON strings to fit Convex value limits
-    nodesJson: v.string(), // [{id, name, community, x, y, size, imageUrl}, ...]
+    nodesJson: v.string(), // [{id, name, community, x, y, size}, ...]
     edgesJson: v.string(), // [{source, target, weight, type}, ...]
     communitiesJson: v.string(), // [{id, label, color, center}, ...]
+    nodeImagesJson: v.optional(v.string()), // {artistId: url, ...} — separate to stay under 1MB
 
     // --- Metrics ---
     modularity: v.optional(v.number()), // Graph modularity score

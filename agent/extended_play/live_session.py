@@ -188,6 +188,14 @@ class LiveSession:
                         "style": "review",
                     }))
 
+        elif tool_name == "create_playlist":
+            playlist_id = result.get("playlist_id") or result.get("playlistId")
+            await self.send_to_client(json.dumps({
+                "type": "create_playlist",
+                "playlistId": playlist_id,
+                "title": args.get("title", "My Crate"),
+            }))
+
         elif tool_name == "add_to_playlist":
             await self.send_to_client(json.dumps({
                 "type": "add_to_playlist",

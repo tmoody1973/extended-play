@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Syne, Hanken_Grotesk, JetBrains_Mono } from "next/font/google";
 import { ConvexClientProvider } from "./ConvexClientProvider";
+import { AudioPlayerProvider } from "@/contexts/audio-player-context";
 import "./globals.css";
 
 const syne = Syne({
@@ -38,7 +39,9 @@ export default function RootLayout({
       className={`${syne.variable} ${hankenGrotesk.variable} ${jetbrainsMono.variable}`}
     >
       <body>
-        <ConvexClientProvider>{children}</ConvexClientProvider>
+        <ConvexClientProvider>
+          <AudioPlayerProvider>{children}</AudioPlayerProvider>
+        </ConvexClientProvider>
       </body>
     </html>
   );

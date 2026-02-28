@@ -698,6 +698,15 @@ export const matchTrackSpotify = internalAction({
         field: "spotifyTrackId",
         value: spotifyTrack.id,
       });
+
+      // Save preview URL if available (30s audio snippet)
+      if (spotifyTrack.preview_url) {
+        await ctx.runMutation(internal.enrichment.updateTrackField, {
+          trackId,
+          field: "spotifyPreviewUrl",
+          value: spotifyTrack.preview_url,
+        });
+      }
     } catch {
       // Silently skip — will retry via cron
     }
@@ -705,7 +714,7 @@ export const matchTrackSpotify = internalAction({
 });
 
 // ═══════════════════════════════════════════════════════════════
-//  LAYER 3: Sonic Features (Spotify ID → ReccoBeats / AcousticBrainz)
+//  LAYER 3: Sonic Features (Spotify ID → SoundStat / AcousticBrainz)
 // ═══════════════════════════════════════════════════════════════
 
 export const enrichTrackSonicFeatures = internalAction({
@@ -715,14 +724,19 @@ export const enrichTrackSonicFeatures = internalAction({
     if (!track) return;
 
     try {
-      // Use Spotify ID with ReccoBeats if available
+      // Use Spotify ID with SoundStat if available
       if (track.spotifyTrackId) {
-        const rbResp = await fetch(
-          `https://api.reccobeats.com/v1/track/${track.spotifyTrackId}/audio-features`
+        const apiKey = process.env.SOUNDSTAT_API_KEY;
+        const ssResp = await fetch(
+          `https://soundstat.info/api/v1/track/${track.spotifyTrackId}`,
+          {
+            headers: apiKey ? { "x-api-key": apiKey } : {},
+          }
         );
 
-        if (rbResp.ok) {
-          const features = await rbResp.json();
+        if (ssResp.ok) {
+          const data = await ssResp.json();
+          const features = data.features;
           if (features && features.danceability !== undefined) {
             await ctx.runMutation(internal.enrichment.updateTrackSonic, {
               trackId,
@@ -731,16 +745,16 @@ export const enrichTrackSonicFeatures = internalAction({
                 danceability: features.danceability ?? 0,
                 energy: features.energy ?? 0,
                 instrumentalness: features.instrumentalness ?? 0,
-                liveness: features.liveness ?? 0,
+                liveness: 0,
                 loudness: features.loudness ?? 0,
-                speechiness: features.speechiness ?? 0,
+                speechiness: 0,
                 tempo: features.tempo ?? 0,
                 valence: features.valence ?? 0,
                 key: features.key,
                 mode: features.mode,
-                durationMs: features.duration_ms,
+                durationMs: data.duration_ms,
               },
-              source: "reccobeats",
+              source: "soundstat",
             });
             return;
           }
@@ -755,7 +769,6 @@ export const enrichTrackSonicFeatures = internalAction({
 
         if (abResp.ok) {
           const abData = await abResp.json();
-          // Map AcousticBrainz low-level features to our schema
           const rhythm = abData.rhythm || {};
           const lowlevel = abData.lowlevel || {};
           const tonal = abData.tonal || {};
@@ -763,7 +776,7 @@ export const enrichTrackSonicFeatures = internalAction({
           await ctx.runMutation(internal.enrichment.updateTrackSonic, {
             trackId,
             sonicFeatures: {
-              acousticness: 0, // Not directly available in AB
+              acousticness: 0,
               danceability: rhythm.danceability ?? 0,
               energy: lowlevel.average_loudness ?? 0,
               instrumentalness: 0,
@@ -831,118 +844,170 @@ export const computeArtistSonicProfile = internalAction({
 //  ORCHESTRATOR: Process enrichment job queue
 // ═══════════════════════════════════════════════════════════════
 
-// Called by a Convex cron or manually to process pending jobs
+// Route a single job to its enrichment handler
+async function executeJob(ctx: any, job: any): Promise<void> {
+  switch (job.step) {
+    case "musicbrainz_lookup":
+      await ctx.runAction(internal.enrichment.enrichArtistLayer1, {
+        artistId: job.targetId as any,
+      });
+      break;
+    case "discogs_fetch":
+      await ctx.runAction(internal.enrichment.enrichArtistDiscogs, {
+        artistId: job.targetId as any,
+      });
+      break;
+    case "fanart_tv_fetch":
+      await ctx.runAction(internal.enrichment.enrichArtistFanartTv, {
+        artistId: job.targetId as any,
+      });
+      break;
+    case "youtube_match":
+      await ctx.runAction(internal.enrichment.enrichArtistYoutube, {
+        artistId: job.targetId as any,
+      });
+      break;
+    case "cover_art_archive":
+      await ctx.runAction(internal.enrichment.enrichTrackAlbumArt, {
+        trackId: job.targetId as any,
+      });
+      break;
+    case "spotify_match":
+      await ctx.runAction(internal.enrichment.matchTrackSpotify, {
+        trackId: job.targetId as any,
+      });
+      break;
+    case "soundstat_fetch":
+      await ctx.runAction(internal.enrichment.enrichTrackSonicFeatures, {
+        trackId: job.targetId as any,
+      });
+      break;
+    case "sonic_profile_compute":
+      await ctx.runAction(internal.enrichment.computeArtistSonicProfile, {
+        artistId: job.targetId as any,
+      });
+      break;
+    case "gemini_grounding":
+      await ctx.runAction(internal.geminiGrounding.enrichArtistWithGrounding, {
+        artistId: job.targetId as any,
+      });
+      break;
+    case "musicbrainz_rels":
+      await ctx.runAction(internal.enrichment.enrichArtistMusicBrainzRels, {
+        artistId: job.targetId as any,
+      });
+      break;
+    case "wikipedia_fetch":
+      await ctx.runAction(internal.enrichment.enrichArtistWikipedia, {
+        artistId: job.targetId as any,
+      });
+      break;
+    case "ner_extraction":
+      await ctx.runAction(internal.enrichment.processNerExtraction, {
+        reviewId: job.targetId as any,
+      });
+      break;
+    case "gemini_corpus_seed":
+      await ctx.runAction(internal.geminiGrounding.seedCorpusWithGrounding, {
+        artistId: job.targetId as any,
+      });
+      break;
+    case "review_corpus_seed":
+      await ctx.runAction(internal.reviewSearch.seedCorpusForArtist, {
+        artistId: job.targetId as any,
+      });
+      break;
+  }
+}
+
+// Process a single job with status tracking
+async function processJob(ctx: any, job: any): Promise<boolean> {
+  await ctx.runMutation(internal.enrichment.updateJobStatus, {
+    jobId: job._id,
+    status: "running",
+  });
+  try {
+    await executeJob(ctx, job);
+    await ctx.runMutation(internal.enrichment.updateJobStatus, {
+      jobId: job._id,
+      status: "completed",
+    });
+    return true;
+  } catch (error: any) {
+    const attempts = job.attempts + 1;
+    await ctx.runMutation(internal.enrichment.updateJobStatus, {
+      jobId: job._id,
+      status: attempts >= job.maxAttempts ? "failed" : "queued",
+      error: error.message,
+      attempts,
+    });
+    return false;
+  }
+}
+
+// Fast pipeline: free APIs (images, metadata, IDs) — runs every 5s
+// Processes jobs in parallel batches of 5 (different API types are safe to parallelize)
 export const processEnrichmentQueue = internalAction({
   args: {
     batchSize: v.optional(v.number()),
   },
-  handler: async (ctx, { batchSize = 10 }): Promise<{ processed: number }> => {
-    // Get next batch of queued jobs, highest priority first
-    const jobs = await ctx.runQuery(internal.enrichment.getQueuedJobs, {
+  handler: async (ctx, { batchSize = 25 }): Promise<{ processed: number }> => {
+    // Focus on free API steps that give us images + metadata
+    const FAST_STEPS = [
+      "musicbrainz_lookup", "musicbrainz_rels",
+      "discogs_fetch", "fanart_tv_fetch",
+      "wikipedia_fetch", "youtube_match",
+      "cover_art_archive", "spotify_match",
+      "soundstat_fetch", "sonic_profile_compute",
+      "ner_extraction",
+    ];
+
+    const jobs = await ctx.runQuery(internal.enrichment.getQueuedJobsBySteps, {
+      steps: FAST_STEPS,
       limit: batchSize,
     });
 
-    for (const job of jobs) {
-      // Mark as running
-      await ctx.runMutation(internal.enrichment.updateJobStatus, {
-        jobId: job._id,
-        status: "running",
-      });
+    if (jobs.length === 0) return { processed: 0 };
 
-      try {
-        // Route to appropriate enrichment function
-        switch (job.step) {
-          case "musicbrainz_lookup":
-            await ctx.runAction(internal.enrichment.enrichArtistLayer1, {
-              artistId: job.targetId as any,
-            });
-            break;
-          case "discogs_fetch":
-            await ctx.runAction(internal.enrichment.enrichArtistDiscogs, {
-              artistId: job.targetId as any,
-            });
-            break;
-          case "fanart_tv_fetch":
-            await ctx.runAction(internal.enrichment.enrichArtistFanartTv, {
-              artistId: job.targetId as any,
-            });
-            break;
-          case "youtube_match":
-            await ctx.runAction(internal.enrichment.enrichArtistYoutube, {
-              artistId: job.targetId as any,
-            });
-            break;
-          case "cover_art_archive":
-            await ctx.runAction(internal.enrichment.enrichTrackAlbumArt, {
-              trackId: job.targetId as any,
-            });
-            break;
-          case "spotify_match":
-            await ctx.runAction(internal.enrichment.matchTrackSpotify, {
-              trackId: job.targetId as any,
-            });
-            break;
-          case "reccobeats_fetch":
-            await ctx.runAction(internal.enrichment.enrichTrackSonicFeatures, {
-              trackId: job.targetId as any,
-            });
-            break;
-          case "sonic_profile_compute":
-            await ctx.runAction(internal.enrichment.computeArtistSonicProfile, {
-              artistId: job.targetId as any,
-            });
-            break;
-          case "gemini_grounding":
-            await ctx.runAction(internal.geminiGrounding.enrichArtistWithGrounding, {
-              artistId: job.targetId as any,
-            });
-            break;
-          case "musicbrainz_rels":
-            await ctx.runAction(internal.enrichment.enrichArtistMusicBrainzRels, {
-              artistId: job.targetId as any,
-            });
-            break;
-          case "wikipedia_fetch":
-            await ctx.runAction(internal.enrichment.enrichArtistWikipedia, {
-              artistId: job.targetId as any,
-            });
-            break;
-          case "ner_extraction":
-            await ctx.runAction(internal.enrichment.processNerExtraction, {
-              reviewId: job.targetId as any,
-            });
-            break;
-          case "gemini_corpus_seed":
-            await ctx.runAction(internal.geminiGrounding.seedCorpusWithGrounding, {
-              artistId: job.targetId as any,
-            });
-            break;
-          case "review_corpus_seed":
-            await ctx.runAction(internal.reviewSearch.seedCorpusForArtist, {
-              artistId: job.targetId as any,
-            });
-            break;
-        }
+    let processed = 0;
+    const CONCURRENCY = 5;
 
-        await ctx.runMutation(internal.enrichment.updateJobStatus, {
-          jobId: job._id,
-          status: "completed",
-        });
-      } catch (error: any) {
-        const attempts = job.attempts + 1;
-        await ctx.runMutation(internal.enrichment.updateJobStatus, {
-          jobId: job._id,
-          status: attempts >= job.maxAttempts ? "failed" : "queued",
-          error: error.message,
-          attempts,
-        });
-      }
-
-      // Rate limiting: wait between API calls
-      await new Promise((resolve) => setTimeout(resolve, 500));
+    // Process in parallel batches
+    for (let i = 0; i < jobs.length; i += CONCURRENCY) {
+      const batch = jobs.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(batch.map((job: any) => processJob(ctx, job)));
+      processed += results.filter(Boolean).length;
     }
 
-    return { processed: jobs.length };
+    return { processed };
+  },
+});
+
+// Slow pipeline: paid APIs (Gemini, Exa/Tavily corpus seeding) — runs every 30s
+export const processCorpusQueue = internalAction({
+  args: {
+    batchSize: v.optional(v.number()),
+  },
+  handler: async (ctx, { batchSize = 3 }): Promise<{ processed: number }> => {
+    const PAID_STEPS = [
+      "gemini_corpus_seed", "review_corpus_seed", "gemini_grounding",
+    ];
+
+    const jobs = await ctx.runQuery(internal.enrichment.getQueuedJobsBySteps, {
+      steps: PAID_STEPS,
+      limit: batchSize,
+    });
+
+    if (jobs.length === 0) return { processed: 0 };
+
+    // Process sequentially — paid APIs need careful rate limiting
+    let processed = 0;
+    for (const job of jobs) {
+      const ok = await processJob(ctx, job);
+      if (ok) processed++;
+    }
+
+    return { processed };
   },
 });
 
@@ -987,7 +1052,7 @@ export const enrichAllTrackArt = action({
         targetType: "track",
         targetId: track._id,
         targetName: `${track.artistName} - ${track.title}`,
-        steps: ["cover_art_archive", "spotify_match", "reccobeats_fetch"],
+        steps: ["cover_art_archive", "spotify_match", "soundstat_fetch"],
         priority: "normal",
       });
     }
@@ -1141,6 +1206,32 @@ export const getQueuedJobs = internalQuery({
   },
 });
 
+// Get queued jobs filtered by step type (for separate fast/slow pipelines)
+// Uses by_step index to efficiently find jobs for specific enrichment steps
+export const getQueuedJobsBySteps = internalQuery({
+  args: {
+    steps: v.array(v.string()),
+    limit: v.number(),
+  },
+  handler: async (ctx, { steps, limit }) => {
+    const results = [];
+    const perStep = Math.max(3, Math.ceil(limit / steps.length));
+
+    // Query each step using the by_step index (efficient — skips corpus seed jobs entirely)
+    for (const step of steps) {
+      if (results.length >= limit) break;
+      const jobs = await ctx.db
+        .query("enrichmentJobs")
+        .withIndex("by_step", (q) => q.eq("step", step as any).eq("status", "queued"))
+        .take(perStep);
+      results.push(...jobs);
+    }
+
+    // Return up to limit, sorted by creation time (oldest first)
+    return results.slice(0, limit).sort((a, b) => a.createdAt - b.createdAt);
+  },
+});
+
 export const updateArtistEnrichment = internalMutation({
   args: {
     artistId: v.id("artists"),
@@ -1157,8 +1248,24 @@ export const updateArtistEnrichment = internalMutation({
     if (!artist) return;
 
     const currentLog = artist.enrichmentLog || [];
+    const merged = { ...artist, ...updates };
+
+    // Auto-promote enrichmentStatus based on accumulated data
+    let status = updates.enrichmentStatus ?? artist.enrichmentStatus;
+    if (status === "identified" || status === "stub") {
+      // Has images? → "images"
+      const hasImages = merged.images?.primary?.url || merged.images?.thumbnail?.url;
+      const hasMeta = merged.discogsId || merged.bio;
+      if (hasImages) {
+        status = "images";
+      } else if (hasMeta) {
+        status = "metadata";
+      }
+    }
+
     await ctx.db.patch(artistId, {
       ...updates,
+      enrichmentStatus: status,
       enrichmentLog: [...currentLog, logEntry],
       lastEnrichedAt: Date.now(),
       updatedAt: Date.now(),
@@ -1956,3 +2063,72 @@ const CAPS_STOPWORDS = new Set([
   "NOW", "RUN", "SET", "TRY", "TOP", "END", "BIG", "LET", "SAY",
   "NPR", "BBC", "DIY", "NYC", "USA", "LED", "NEO",
 ]);
+
+// ═══════════════════════════════════════════════════════════════
+//  ON-DEMAND YOUTUBE TRACK MATCH
+//  Called from frontend when user clicks play on a track without
+//  a youtubeVideoId. Searches YouTube once, caches result forever.
+// ═══════════════════════════════════════════════════════════════
+
+export const matchTrackYoutube = action({
+  args: { trackId: v.id("tracks") },
+  handler: async (ctx, { trackId }): Promise<{ youtubeVideoId: string | null }> => {
+    const track = await ctx.runQuery(internal.enrichment.getTrack, { trackId });
+    if (!track) return { youtubeVideoId: null };
+
+    // Already matched — return cached result
+    if (track.youtubeVideoId) return { youtubeVideoId: track.youtubeVideoId };
+
+    const query = `${track.artistName} ${track.title}`;
+    let videoId: string | null = null;
+
+    // Primary: YouTube InnerTube API (no quota, no API key needed)
+    try {
+      const resp = await fetch(
+        "https://www.youtube.com/youtubei/v1/search?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            context: { client: { clientName: "WEB", clientVersion: "2.20240101.00.00" } },
+            query,
+          }),
+        }
+      );
+      if (resp.ok) {
+        const text = await resp.text();
+        const match = text.match(/"videoId"\s*:\s*"([a-zA-Z0-9_-]{11})"/);
+        videoId = match?.[1] ?? null;
+      }
+    } catch {
+      // Fall through to API fallback
+    }
+
+    // Fallback: YouTube Data API v3 (if key set and quota available)
+    if (!videoId) {
+      const apiKey = process.env.YOUTUBE_API_KEY;
+      if (apiKey) {
+        try {
+          const resp = await fetch(
+            `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&videoCategoryId=10&maxResults=1&key=${apiKey}`
+          );
+          if (resp.ok) {
+            const data = await resp.json();
+            videoId = data.items?.[0]?.id?.videoId ?? null;
+          }
+        } catch { /* non-critical */ }
+      }
+    }
+
+    if (videoId) {
+      await ctx.runMutation(internal.enrichment.updateTrackField, {
+        trackId,
+        field: "youtubeVideoId",
+        value: videoId,
+      });
+      return { youtubeVideoId: videoId };
+    }
+
+    return { youtubeVideoId: null };
+  },
+});

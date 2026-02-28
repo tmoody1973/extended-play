@@ -10,13 +10,30 @@ import { Doc } from "./_generated/dataModel";
 //  GRAPH DATA — For D3 Force-Directed Influence Map
 // ═══════════════════════════════════════════════════════════════
 
-// Get the active graph snapshot for rendering
+// Get the active graph snapshot + companion chunks (client merges them)
 export const getActiveGraph = query({
   handler: async (ctx) => {
-    return await ctx.db
+    const snapshot = await ctx.db
       .query("graphSnapshots")
       .withIndex("by_active", (q) => q.eq("isActive", true))
       .first();
+    if (!snapshot) return null;
+
+    // Return primary + companion docs as-is (avoid server-side JSON parse/merge/re-serialize)
+    const companions = await ctx.db
+      .query("graphSnapshots")
+      .withIndex("by_version", (q) => q.eq("version", snapshot.version))
+      .collect();
+
+    const chunks = companions
+      .filter((c) => c._id !== snapshot._id)
+      .map((c) => ({
+        nodesJson: c.nodesJson !== "[]" ? c.nodesJson : undefined,
+        edgesJson: c.edgesJson !== "[]" ? c.edgesJson : undefined,
+        nodeImagesJson: c.nodeImagesJson || undefined,
+      }));
+
+    return { ...snapshot, chunks };
   },
 });
 
@@ -195,18 +212,6 @@ export const searchArtists = query({
   },
 });
 
-// Get bridge artists (for featured display)
-export const getBridgeArtists = query({
-  args: { limit: v.optional(v.number()) },
-  handler: async (ctx, { limit = 10 }) => {
-    return await ctx.db
-      .query("artists")
-      .withIndex("by_bridgeScore")
-      .order("desc")
-      .take(limit);
-  },
-});
-
 // ═══════════════════════════════════════════════════════════════
 //  EPISODE QUERIES
 // ═══════════════════════════════════════════════════════════════
@@ -376,41 +381,158 @@ export const getArtistIdsByDateRange = query({
 //  ENRICHMENT STATUS (for admin dashboard / progress tracking)
 // ═══════════════════════════════════════════════════════════════
 
+// Deprecated — use getEnrichmentMonitor instead (indexed, no full table scans)
 export const getEnrichmentStats = query({
+  handler: async () => {
+    return {
+      artistStats: { total: 0, stub: 0, identified: 0, metadata: 0, images: 0, sonic: 0, complete: 0, withImages: 0, withSonicProfile: 0 },
+      trackStats: { total: 0, raw: 0, matched: 0, artwork: 0, sonic: 0, complete: 0, withAlbumArt: 0 },
+      jobStats: { queued: 0, running: 0, completed: 0, failed: 0 },
+    };
+  },
+});
+
+// Enrichment pipeline monitor — lightweight, uses indexed counting
+// Reads at most ~200 docs per step (not 5000) to stay well under limits
+export const getEnrichmentMonitor = query({
   handler: async (ctx) => {
-    const allArtists = await ctx.db.query("artists").collect();
-    const allTracks = await ctx.db.query("tracks").collect();
-    const allJobs = await ctx.db.query("enrichmentJobs").collect();
+    // Only check active steps (skip ones unlikely to have jobs)
+    const ACTIVE_STEPS = [
+      "musicbrainz_lookup", "discogs_fetch", "fanart_tv_fetch",
+      "wikipedia_fetch", "youtube_match", "musicbrainz_rels",
+      "cover_art_archive", "spotify_match", "soundstat_fetch",
+      "sonic_profile_compute", "ner_extraction",
+      "gemini_corpus_seed", "review_corpus_seed",
+    ];
 
-    const artistStats = {
-      total: allArtists.length,
-      stub: allArtists.filter((a) => a.enrichmentStatus === "stub").length,
-      identified: allArtists.filter((a) => a.enrichmentStatus === "identified").length,
-      metadata: allArtists.filter((a) => a.enrichmentStatus === "metadata").length,
-      images: allArtists.filter((a) => a.enrichmentStatus === "images").length,
-      sonic: allArtists.filter((a) => a.enrichmentStatus === "sonic").length,
-      complete: allArtists.filter((a) => a.enrichmentStatus === "complete").length,
-      withImages: allArtists.filter((a) => a.images?.primary).length,
-      withSonicProfile: allArtists.filter((a) => a.sonicProfile).length,
+    const stepCounts: Record<string, { queued: number; running: number; failed: number }> = {};
+    let totalQueued = 0;
+    let totalRunning = 0;
+    let totalFailed = 0;
+
+    for (const step of ACTIVE_STEPS) {
+      // Cap at 200 per query — gives accurate-enough counts without blowing read limits
+      const queued = await ctx.db.query("enrichmentJobs")
+        .withIndex("by_step", (q) => q.eq("step", step as any).eq("status", "queued"))
+        .take(200);
+      const running = await ctx.db.query("enrichmentJobs")
+        .withIndex("by_step", (q) => q.eq("step", step as any).eq("status", "running"))
+        .take(10);
+      const failed = await ctx.db.query("enrichmentJobs")
+        .withIndex("by_step", (q) => q.eq("step", step as any).eq("status", "failed"))
+        .take(10);
+
+      const q = queued.length;
+      const r = running.length;
+      const f = failed.length;
+      if (q > 0 || r > 0 || f > 0) {
+        // Mark as 200+ if we hit the cap (approximate)
+        stepCounts[step] = { queued: q, running: r, failed: f };
+      }
+      totalQueued += q;
+      totalRunning += r;
+      totalFailed += f;
+    }
+
+    // Artist enrichment progress — cap at 500 per status
+    const CAP = 500;
+    const stubs = (await ctx.db.query("artists")
+      .withIndex("by_enrichmentStatus", (q) => q.eq("enrichmentStatus", "stub"))
+      .take(CAP)).length;
+    const identified = (await ctx.db.query("artists")
+      .withIndex("by_enrichmentStatus", (q) => q.eq("enrichmentStatus", "identified"))
+      .take(CAP)).length;
+    const metadata = (await ctx.db.query("artists")
+      .withIndex("by_enrichmentStatus", (q) => q.eq("enrichmentStatus", "metadata"))
+      .take(CAP)).length;
+    const withImages = (await ctx.db.query("artists")
+      .withIndex("by_enrichmentStatus", (q) => q.eq("enrichmentStatus", "images"))
+      .take(CAP)).length;
+    const sonic = (await ctx.db.query("artists")
+      .withIndex("by_enrichmentStatus", (q) => q.eq("enrichmentStatus", "sonic"))
+      .take(CAP)).length;
+    const complete = (await ctx.db.query("artists")
+      .withIndex("by_enrichmentStatus", (q) => q.eq("enrichmentStatus", "complete"))
+      .take(CAP)).length;
+
+    // Failed job samples (only 3 queries max)
+    const failedSample: Array<{ step: string; name: string; error?: string }> = [];
+    const failedJobs = await ctx.db.query("enrichmentJobs")
+      .withIndex("by_status_priority", (q) => q.eq("status", "failed"))
+      .take(5);
+    for (const j of failedJobs) {
+      failedSample.push({ step: j.step, name: j.targetName, error: j.lastError });
+    }
+
+    return {
+      pipeline: { queued: totalQueued, running: totalRunning, failed: totalFailed },
+      steps: stepCounts,
+      artists: {
+        stubs, identified, metadata,
+        images: withImages, sonic, complete,
+      },
+      failedSample,
     };
+  },
+});
 
-    const trackStats = {
-      total: allTracks.length,
-      raw: allTracks.filter((t) => t.enrichmentStatus === "raw").length,
-      matched: allTracks.filter((t) => t.enrichmentStatus === "matched").length,
-      artwork: allTracks.filter((t) => t.enrichmentStatus === "artwork").length,
-      sonic: allTracks.filter((t) => t.enrichmentStatus === "sonic").length,
-      complete: allTracks.filter((t) => t.enrichmentStatus === "complete").length,
-      withAlbumArt: allTracks.filter((t) => t.albumArt?.primaryUrl).length,
-    };
+// ═══════════════════════════════════════════════════════════════
+//  BRIDGE ARTISTS — Lightweight preload for welcome + explore
+//  Returns top artists by connection count with minimal fields
+// ═══════════════════════════════════════════════════════════════
 
-    const jobStats = {
-      queued: allJobs.filter((j) => j.status === "queued").length,
-      running: allJobs.filter((j) => j.status === "running").length,
-      completed: allJobs.filter((j) => j.status === "completed").length,
-      failed: allJobs.filter((j) => j.status === "failed").length,
-    };
+export const getBridgeArtists = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit = 50 }) => {
+    // Get artists sorted by bridgeScore (indexed)
+    const byBridge = await ctx.db
+      .query("artists")
+      .withIndex("by_bridgeScore")
+      .order("desc")
+      .take(limit * 2);
 
-    return { artistStats, trackStats, jobStats };
+    // Filter to artists past stub stage, take top N
+    const artists = byBridge
+      .filter((a) => a.name && a.enrichmentStatus !== "stub")
+      .slice(0, limit);
+
+    const artistIds = new Set(artists.map((a) => a._id.toString()));
+
+    // Build nodes
+    const nodes = artists.map((a) => ({
+      id: a._id,
+      name: a.name,
+      imageUrl: a.images?.thumbnail?.url || a.images?.primary?.url,
+      communityId: a.communityId ?? 0,
+      communityLabel: a.communityLabel,
+      bridgeScore: a.bridgeScore ?? 0,
+      genres: a.genres?.slice(0, 3),
+      country: a.country,
+    }));
+
+    // Collect edges between these artists only
+    const edges: Array<{ source: string; target: string; weight: number }> = [];
+    const seenEdges = new Set<string>();
+
+    for (const a of artists) {
+      const conns = await ctx.db
+        .query("artistConnections")
+        .withIndex("by_source", (q) => q.eq("sourceArtistId", a._id))
+        .collect();
+
+      for (const c of conns) {
+        if (!artistIds.has(c.targetArtistId.toString())) continue;
+        const key = `${c.sourceArtistId}-${c.targetArtistId}`;
+        if (seenEdges.has(key)) continue;
+        seenEdges.add(key);
+        edges.push({
+          source: c.sourceArtistId.toString(),
+          target: c.targetArtistId.toString(),
+          weight: c.weight,
+        });
+      }
+    }
+
+    return { nodes, edges };
   },
 });

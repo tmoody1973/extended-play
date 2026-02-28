@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
-import { useQuery } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { AppShell } from "@/components/layout/app-shell";
 import { MainLayout } from "@/components/layout/main-layout";
 import { VoiceBar } from "@/components/voice/voice-bar";
 import { EpisodeSidebar } from "@/components/layout/episode-sidebar";
 import { InfluenceMap } from "@/components/graph/influence-map";
+import { ArtistDetailDrawer } from "@/components/graph/artist-detail-drawer";
 import { StoryStream } from "@/components/stream/story-stream";
 import { PlaylistBar } from "@/components/playlist/playlist-bar";
 import { useAgentConnection, AgentEvent } from "@/hooks/use-agent-connection";
@@ -18,11 +19,73 @@ const AGENT_WS_URL = process.env.NEXT_PUBLIC_AGENT_WS_URL || "ws://localhost:800
 export default function Home() {
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<Id<"episodes"> | undefined>();
   const [selectedArtistId, setSelectedArtistId] = useState<string | undefined>();
-  const [storyItems, setStoryItems] = useState<AgentEvent[]>([]);
+  // TODO: Remove test seed after visual verification
+  const [storyItems, setStoryItems] = useState<AgentEvent[]>([
+    {
+      type: "show_narration",
+      text: "Welcome to Rhythm Lab Radio — let's dig into the crates tonight.",
+      style: "intro",
+    },
+    {
+      type: "show_episode",
+      data: {
+        title: "Rhythm Lab Radio #412 — UK Jazz Renaissance",
+        airDate: "2025-12-15",
+        description:
+          "A deep dive into the new wave of UK jazz — from Shabaka Hutchings to Nubya Garcia, tracing the thread from Blue Note to Brownswood.",
+        tracks: [
+          { _id: "seed-1", title: "Blue in Green", artistName: "Miles Davis", youtubeVideoId: "PoPL7BExSQU" },
+          { _id: "seed-2", title: "Maiden Voyage", artistName: "Herbie Hancock", youtubeVideoId: "hwuMSL4CSWY" },
+          { _id: "seed-3", title: "Everybody Loves the Sunshine", artistName: "Roy Ayers", youtubeVideoId: "M82Mg_1F0Ks" },
+          { _id: "seed-4", title: "Sun Ra Medley", artistName: "Sun Ra", youtubeVideoId: "UvPaSaVMFRg" },
+          { _id: "seed-5", title: "The Köln Concert (Pt. I)", artistName: "Keith Jarrett" },
+          { _id: "seed-6", title: "Black Gold", artistName: "Nubya Garcia", youtubeVideoId: "tGm2yiUVols" },
+          { _id: "seed-7", title: "Afro Blue", artistName: "Mongo Santamaría", youtubeVideoId: "ublSAzsF4U4" },
+          { _id: "seed-8", title: "Bumpin' on Sunset", artistName: "Wes Montgomery" },
+        ],
+      },
+    },
+    {
+      type: "show_artist",
+      artistId: "test",
+      data: {
+        name: "Nubya Garcia",
+        genres: ["uk jazz", "afrobeat", "spiritual jazz"],
+        country: "United Kingdom",
+        communityLabel: "London Jazz Scene",
+        bio: "Nubya Garcia is a London-based tenor saxophonist and composer at the forefront of the UK jazz renaissance.",
+      },
+    },
+  ]);
+  const [isExploring, setIsExploring] = useState(false);
+  const [revealedArtistIds, setRevealedArtistIds] = useState<Set<string>>(new Set());
+  const [hasClickedNode, setHasClickedNode] = useState(false);
   const [highlightedNodeId, setHighlightedNodeId] = useState<string | undefined>();
   const [selectedTimeRange, setSelectedTimeRange] = useState<
     { startTimestamp: number; endTimestamp: number } | undefined
   >();
+  const [activePlaylistId, setActivePlaylistId] = useState<Id<"playlists"> | undefined>();
+
+  // Reactive playlist subscription — updates automatically when agent mutates
+  const playlistData = useQuery(
+    api.queries.getPlaylistWithTracks,
+    activePlaylistId ? { playlistId: activePlaylistId } : "skip"
+  );
+
+  const playlistTracks = useMemo(() => {
+    if (!playlistData?.tracks) return [];
+    return playlistData.tracks.map((t: any) => ({
+      id: t._id,
+      title: t.title,
+      artistName: t.artistName,
+      albumArtUrl: t.albumArtUrl || t.albumArt?.primaryUrl,
+      youtubeVideoId: t.youtubeVideoId,
+      spotifyTrackId: t.spotifyTrackId,
+    }));
+  }, [playlistData]);
+
+  const createPlaylist = useMutation(api.playlists.create);
+  const addTrackMutation = useMutation(api.playlists.addTrack);
 
   // When an episode is selected, get its tracks to filter the graph
   const episodeWithTracks = useQuery(
@@ -47,24 +110,55 @@ export default function Home() {
     return undefined;
   }, [timeRangeArtists, episodeWithTracks]);
 
+  const revealArtists = useCallback((...ids: (string | undefined)[]) => {
+    const valid = ids.filter((id): id is string => !!id);
+    if (valid.length === 0) return;
+    setRevealedArtistIds((prev) => {
+      const next = new Set(prev);
+      for (const id of valid) next.add(id);
+      return next;
+    });
+  }, []);
+
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
       case "show_artist":
-      case "show_narration":
+        setStoryItems((prev) => [...prev, event]);
+        setIsExploring(true);
+        revealArtists(event.artistId as string);
+        break;
       case "show_episode":
+        setStoryItems((prev) => [...prev, event]);
+        setIsExploring(true);
+        break;
+      case "show_narration":
         setStoryItems((prev) => [...prev, event]);
         break;
       case "highlight_node":
         setHighlightedNodeId(event.artistId as string);
+        revealArtists(event.artistId as string);
         break;
       case "navigate_graph":
         setHighlightedNodeId(event.centerId as string);
+        setIsExploring(true);
+        revealArtists(
+          event.centerId as string,
+          ...((event as any).nodes?.map((n: any) => n.id || n) ?? [])
+        );
+        break;
+      case "create_playlist":
+        setIsExploring(true);
+        if (event.playlistId) {
+          setActivePlaylistId(event.playlistId as Id<"playlists">);
+        }
         break;
       case "add_to_playlist":
-        // TODO: update playlist bar reactively
+        if (event.playlistId) {
+          setActivePlaylistId(event.playlistId as Id<"playlists">);
+        }
         break;
     }
-  }, []);
+  }, [revealArtists]);
 
   const agent = useAgentConnection({
     agentUrl: AGENT_WS_URL,
@@ -75,17 +169,56 @@ export default function Home() {
     if (agent.isRecording) {
       agent.stopRecording();
     } else {
+      setIsExploring(true);
       agent.startRecording();
     }
   };
 
+  const handleExploreAll = useCallback(() => {
+    setIsExploring(true);
+    setRevealedArtistIds(new Set()); // empty set + isExploring = full map
+  }, []);
+
   const handleNodeClick = (artistId: string) => {
+    // Only open drawer for real Convex IDs (not demo node IDs like "1", "2")
+    if (artistId.length > 10) {
+      setSelectedArtistId(artistId);
+    }
+    setHasClickedNode(true);
+  };
+
+  const handleNavigateToArtist = (artistId: string) => {
     setSelectedArtistId(artistId);
   };
 
   const handleTrackSelect = (trackId: Id<"tracks">, artistId: Id<"artists">) => {
     setSelectedArtistId(artistId);
   };
+
+  // Add to Crate: creates playlist if needed, adds all artist tracks
+  const handleAddToCrate = useCallback(
+    async (tracks: Array<{ id: string; title: string; albumTitle?: string }>) => {
+      let playlistId = activePlaylistId;
+
+      if (!playlistId) {
+        playlistId = await createPlaylist({
+          title: "My Crate",
+          trackIds: tracks.map((t) => t.id as Id<"tracks">),
+          generatedFrom: { type: "user_curated" },
+        });
+        setActivePlaylistId(playlistId);
+      } else {
+        // Add tracks one by one to existing playlist
+        for (const track of tracks) {
+          await addTrackMutation({
+            playlistId,
+            trackId: track.id as Id<"tracks">,
+          });
+        }
+      }
+    },
+    [activePlaylistId, createPlaylist, addTrackMutation]
+  );
 
   return (
     <AppShell>
@@ -107,13 +240,29 @@ export default function Home() {
         graph={
           <InfluenceMap
             onNodeClick={handleNodeClick}
-            highlightedNodeId={highlightedNodeId}
+            selectedNodeId={selectedArtistId}
             filterArtistIds={filterArtistIds}
+            isExploring={isExploring}
+            revealedArtistIds={revealedArtistIds}
+            onExploreAll={handleExploreAll}
+            hasClickedNode={hasClickedNode}
           />
         }
         stream={<StoryStream items={storyItems} />}
       />
-      <PlaylistBar title="My Crate" tracks={[]} />
+      <PlaylistBar
+        playlistId={activePlaylistId}
+        title={playlistData?.title || "My Crate"}
+        tracks={playlistTracks}
+      />
+
+      {/* Artist Detail Drawer — slides from right on node click */}
+      <ArtistDetailDrawer
+        artistId={selectedArtistId}
+        onClose={() => setSelectedArtistId(undefined)}
+        onNavigateToArtist={handleNavigateToArtist}
+        onAddToCrate={handleAddToCrate}
+      />
     </AppShell>
   );
 }

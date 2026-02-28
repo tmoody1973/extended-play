@@ -1,13 +1,15 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { useQuery } from "convex/react";
+import { useQuery, useAction } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Id } from "../../../convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
 import { useEpisodeCalendar } from "@/hooks/use-episode-calendar";
+import { useAudioPlayer, type PlayableTrack } from "@/contexts/audio-player-context";
 import { YearOverview } from "./year-overview";
 import { MonthView } from "./month-view";
+import { Play, Pause } from "lucide-react";
 
 type BrowseLevel =
   | { level: "years" }
@@ -28,6 +30,9 @@ export function EpisodeBrowser({
   activeTimeRange,
 }: EpisodeBrowserProps) {
   const { years, maxMonthEpisodes, isLoading } = useEpisodeCalendar();
+  const { currentTrack, isPlaying, play, pause, resume } = useAudioPlayer();
+  const matchYoutube = useAction(api.enrichment.matchTrackYoutube);
+  const [matchingTrackId, setMatchingTrackId] = useState<string | null>(null);
   const [browseLevel, setBrowseLevel] = useState<BrowseLevel>({ level: "years" });
 
   // Track-level data (only fetched when viewing a specific episode)
@@ -57,12 +62,38 @@ export function EpisodeBrowser({
 
   const handleBackToMonths = useCallback(() => {
     if (browseLevel.level === "tracks") {
-      // We don't store which year we came from in tracks level,
-      // so go back to years
       setBrowseLevel({ level: "years" });
       onEpisodeSelect(undefined);
     }
   }, [browseLevel, onEpisodeSelect]);
+
+  const handleTrackPlay = useCallback(async (track: any) => {
+    // Already playing this track — toggle
+    if (currentTrack?.id === track._id && isPlaying) { pause(); return; }
+    if (currentTrack?.id === track._id) { resume(); return; }
+
+    let videoId = track.youtubeVideoId;
+
+    // On-demand YouTube match if no video ID yet
+    if (!videoId) {
+      setMatchingTrackId(track._id);
+      try {
+        const result = await matchYoutube({ trackId: track._id });
+        videoId = result.youtubeVideoId;
+      } catch { /* non-critical */ }
+      setMatchingTrackId(null);
+    }
+
+    if (!videoId) return;
+
+    play({
+      id: track._id,
+      title: track.title,
+      artistName: track.artistName,
+      albumArtUrl: track.albumArtUrl,
+      youtubeVideoId: videoId,
+    });
+  }, [currentTrack, isPlaying, play, pause, resume, matchYoutube]);
 
   // Loading skeleton
   if (isLoading) {
@@ -86,7 +117,7 @@ export function EpisodeBrowser({
     <div className="h-full flex flex-col p-3 bg-walnut">
       {/* Header */}
       <div className="flex items-center justify-between mb-3 px-1">
-        <h3 className="label-uppercase text-[11px] text-sleeve">
+        <h3 className="label-uppercase text-[11px] text-sleeve min-w-0 truncate">
           {browseLevel.level === "years" && "Episodes"}
           {browseLevel.level === "months" && `${browseLevel.year}`}
           {browseLevel.level === "tracks" && (episodeWithTracks?.title || "Loading...")}
@@ -137,26 +168,54 @@ export function EpisodeBrowser({
 
             {episodeWithTracks?.tracks && (
               <div className="space-y-0.5">
-                {episodeWithTracks.tracks.map((track: any, i: number) => (
-                  <button
-                    key={track._id}
-                    onClick={() => onTrackSelect(track._id, track.artistId)}
-                    className={cn(
-                      "w-full flex items-center gap-2 p-1.5 rounded transition-colors",
-                      "hover:bg-shelf cursor-pointer group"
-                    )}
-                  >
-                    <span className="text-shadow font-data text-[10px] w-4 flex-shrink-0 text-right">
-                      {i + 1}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-cream text-xs truncate group-hover:text-amber transition-colors">
-                        {track.title}
-                      </p>
-                      <p className="text-sleeve text-[10px] truncate">{track.artistName}</p>
+                {episodeWithTracks.tracks.map((track: any, i: number) => {
+                  const isActive = currentTrack?.id === track._id;
+                  const isTrackPlaying = isActive && isPlaying;
+                  const isMatching = matchingTrackId === track._id;
+
+                  return (
+                    <div
+                      key={track._id}
+                      className={cn(
+                        "w-full flex items-center gap-2 p-1.5 rounded transition-colors group",
+                        isActive ? "bg-shelf" : "hover:bg-shelf/50"
+                      )}
+                    >
+                      {/* Play button — searches YouTube on-demand if needed */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleTrackPlay(track); }}
+                        disabled={isMatching}
+                        className={cn(
+                          "w-5 h-5 flex items-center justify-center flex-shrink-0 transition-colors",
+                          isMatching ? "text-gold animate-pulse" :
+                          isActive ? "text-gold" : "text-shadow group-hover:text-sleeve"
+                        )}
+                      >
+                        {isMatching ? (
+                          <span className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                        ) : isTrackPlaying ? (
+                          <Pause className="w-3 h-3" fill="currentColor" />
+                        ) : (
+                          <Play className="w-3 h-3" fill="currentColor" />
+                        )}
+                      </button>
+
+                      {/* Track info — click to select artist on graph */}
+                      <button
+                        onClick={() => onTrackSelect(track._id, track.artistId)}
+                        className="min-w-0 flex-1 text-left cursor-pointer"
+                      >
+                        <p className={cn(
+                          "text-xs truncate transition-colors",
+                          isActive ? "text-gold" : "text-cream group-hover:text-amber"
+                        )}>
+                          {track.title}
+                        </p>
+                        <p className="text-sleeve text-[10px] truncate">{track.artistName}</p>
+                      </button>
                     </div>
-                  </button>
-                ))}
+                  );
+                })}
               </div>
             )}
 

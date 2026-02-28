@@ -4,6 +4,7 @@ import { useRef, useEffect } from "react";
 import { NarrationCard } from "./narration-card";
 import { ArtistCard } from "./artist-card";
 import { AlbumArtCard } from "./album-art-card";
+import { EpisodeCard } from "./episode-card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { AgentEvent } from "@/hooks/use-agent-connection";
 
@@ -52,6 +53,27 @@ export function StoryStream({ items = [] }: StoryStreamProps) {
                   communityLabel={(data?.communityLabel as string) || ""}
                   imageUrl={(data?.images as any)?.thumbnail?.url}
                   bio={(data?.bio as string) || ""}
+                />
+              );
+            }
+            case "show_episode": {
+              const epData = item.data as Record<string, unknown> | undefined;
+              const epTracks = (epData?.tracks as any[]) || [];
+              return (
+                <EpisodeCard
+                  key={i}
+                  title={(epData?.title as string) || "Episode"}
+                  airDate={epData?.airDate as string | undefined}
+                  description={epData?.description as string | undefined}
+                  coverImageUrl={epData?.coverImageUrl as string | undefined}
+                  tracks={epTracks.map((t: any) => ({
+                    id: t._id || t.id || String(Math.random()),
+                    title: t.title || "Unknown Track",
+                    artistName: t.artistName,
+                    albumArtUrl: t.albumArtUrl || t.albumArt?.primaryUrl,
+                    youtubeVideoId: t.youtubeVideoId,
+                    position: t.position,
+                  }))}
                 />
               );
             }

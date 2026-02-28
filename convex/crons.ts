@@ -6,12 +6,22 @@ import { internal } from "./_generated/api";
 
 const crons = cronJobs();
 
-// Process enrichment queue every 15 seconds
+// Fast pipeline: free APIs (images, metadata, IDs)
+// 25 jobs × 5 concurrent × every 5s = ~300 jobs/min
 crons.interval(
   "process enrichment queue",
-  { seconds: 15 },
+  { seconds: 5 },
   internal.enrichment.processEnrichmentQueue,
-  { batchSize: 10 } // Moderate batch — respects MusicBrainz 1req/s, Discogs 60/min
+  { batchSize: 25 }
+);
+
+// Slow pipeline: paid APIs (Gemini, Exa/Tavily corpus seeding)
+// 3 jobs sequential × every 30s = ~6 jobs/min (respects rate limits)
+crons.interval(
+  "process corpus queue",
+  { seconds: 30 },
+  internal.enrichment.processCorpusQueue,
+  { batchSize: 3 }
 );
 
 export default crons;

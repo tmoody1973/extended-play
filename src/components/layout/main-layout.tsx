@@ -11,7 +11,7 @@ export function MainLayout({ sidebar, graph, stream }: MainLayoutProps) {
     <div className="flex-1 flex overflow-hidden">
       {/* Episode Sidebar — hidden on mobile, visible on desktop */}
       {sidebar && (
-        <aside className="hidden lg:flex w-[250px] flex-shrink-0 border-r border-edge overflow-y-auto">
+        <aside className="hidden lg:block w-[280px] flex-shrink-0 border-r border-edge overflow-y-auto overflow-x-hidden">
           {sidebar}
         </aside>
       )}
@@ -22,7 +22,7 @@ export function MainLayout({ sidebar, graph, stream }: MainLayoutProps) {
       </div>
 
       {/* Story Stream — fixed width on desktop, full width on mobile */}
-      <div className="w-full md:w-[400px] flex-shrink-0 md:border-l border-edge overflow-y-auto">
+      <div className="w-full md:w-[400px] flex-shrink-0 md:border-l border-edge overflow-y-auto overflow-x-hidden">
         {stream}
       </div>
     </div>
