@@ -85,7 +85,9 @@ export const enrichArtistLayer1 = internalAction({
         },
       });
 
-      // Queue Layer 1b + Layer 2 enrichment jobs
+      // Queue Layer 1b + Layer 2 enrichment jobs (free APIs only)
+      // Paid steps (review_corpus_seed, gemini_corpus_seed) are triggered
+      // selectively via batchCorpusSeed for high-signal artists
       await ctx.runMutation(internal.enrichment.queueEnrichmentJobs, {
         targetType: "artist",
         targetId: artistId,
@@ -98,8 +100,6 @@ export const enrichArtistLayer1 = internalAction({
           "wikimedia_fetch",
           "youtube_match",
           "wikipedia_fetch",
-          "review_corpus_seed",
-          "gemini_corpus_seed",
         ],
         priority: "normal",
       });
@@ -636,7 +636,76 @@ export const enrichArtistYoutube = internalAction({
 });
 
 // ═══════════════════════════════════════════════════════════════
-//  LAYER 3: Sonic Features (ReccoBeats / AcousticBrainz)
+//  SPOTIFY TOKEN — Client credentials flow (no user auth needed)
+// ═══════════════════════════════════════════════════════════════
+
+let spotifyTokenCache: { token: string; expiresAt: number } | null = null;
+
+async function getSpotifyToken(): Promise<string> {
+  if (spotifyTokenCache && Date.now() < spotifyTokenCache.expiresAt) {
+    return spotifyTokenCache.token;
+  }
+
+  const clientId = process.env.SPOTIFY_CLIENT_ID;
+  const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+  if (!clientId || !clientSecret) throw new Error("Missing Spotify credentials");
+
+  const resp = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+    },
+    body: "grant_type=client_credentials",
+  });
+
+  if (!resp.ok) throw new Error(`Spotify auth error: ${resp.status}`);
+  const data = await resp.json();
+
+  spotifyTokenCache = {
+    token: data.access_token,
+    expiresAt: Date.now() + (data.expires_in - 60) * 1000,
+  };
+
+  return data.access_token;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SPOTIFY TRACK MATCH — Search by name → store Spotify ID
+// ═══════════════════════════════════════════════════════════════
+
+export const matchTrackSpotify = internalAction({
+  args: { trackId: v.id("tracks") },
+  handler: async (ctx, { trackId }) => {
+    const track = await ctx.runQuery(internal.enrichment.getTrack, { trackId });
+    if (!track || track.spotifyTrackId) return; // Already matched
+
+    try {
+      const token = await getSpotifyToken();
+      const query = `track:${track.title} artist:${track.artistName}`;
+      const resp = await fetch(
+        `https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=1`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const spotifyTrack = data.tracks?.items?.[0];
+      if (!spotifyTrack) return;
+
+      await ctx.runMutation(internal.enrichment.updateTrackField, {
+        trackId,
+        field: "spotifyTrackId",
+        value: spotifyTrack.id,
+      });
+    } catch {
+      // Silently skip — will retry via cron
+    }
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  LAYER 3: Sonic Features (Spotify ID → ReccoBeats / AcousticBrainz)
 // ═══════════════════════════════════════════════════════════════
 
 export const enrichTrackSonicFeatures = internalAction({
@@ -646,42 +715,35 @@ export const enrichTrackSonicFeatures = internalAction({
     if (!track) return;
 
     try {
-      // Try ReccoBeats first (drop-in Spotify replacement)
-      const query = `${track.artistName} ${track.title}`;
-      const rbResp = await fetch(
-        `https://api.reccobeats.com/v1/track/search?q=${encodeURIComponent(query)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.RECCOBEATS_API_KEY}`,
-          },
-        }
-      );
+      // Use Spotify ID with ReccoBeats if available
+      if (track.spotifyTrackId) {
+        const rbResp = await fetch(
+          `https://api.reccobeats.com/v1/track/${track.spotifyTrackId}/audio-features`
+        );
 
-      if (rbResp.ok) {
-        const rbData = await rbResp.json();
-        const topTrack = rbData.tracks?.[0];
-
-        if (topTrack?.audio_features) {
-          const features = topTrack.audio_features;
-          await ctx.runMutation(internal.enrichment.updateTrackSonic, {
-            trackId,
-            sonicFeatures: {
-              acousticness: features.acousticness ?? 0,
-              danceability: features.danceability ?? 0,
-              energy: features.energy ?? 0,
-              instrumentalness: features.instrumentalness ?? 0,
-              liveness: features.liveness ?? 0,
-              loudness: features.loudness ?? 0,
-              speechiness: features.speechiness ?? 0,
-              tempo: features.tempo ?? 0,
-              valence: features.valence ?? 0,
-              key: features.key,
-              mode: features.mode,
-              durationMs: features.duration_ms,
-            },
-            source: "reccobeats",
-          });
-          return;
+        if (rbResp.ok) {
+          const features = await rbResp.json();
+          if (features && features.danceability !== undefined) {
+            await ctx.runMutation(internal.enrichment.updateTrackSonic, {
+              trackId,
+              sonicFeatures: {
+                acousticness: features.acousticness ?? 0,
+                danceability: features.danceability ?? 0,
+                energy: features.energy ?? 0,
+                instrumentalness: features.instrumentalness ?? 0,
+                liveness: features.liveness ?? 0,
+                loudness: features.loudness ?? 0,
+                speechiness: features.speechiness ?? 0,
+                tempo: features.tempo ?? 0,
+                valence: features.valence ?? 0,
+                key: features.key,
+                mode: features.mode,
+                durationMs: features.duration_ms,
+              },
+              source: "reccobeats",
+            });
+            return;
+          }
         }
       }
 
@@ -815,6 +877,11 @@ export const processEnrichmentQueue = internalAction({
               trackId: job.targetId as any,
             });
             break;
+          case "spotify_match":
+            await ctx.runAction(internal.enrichment.matchTrackSpotify, {
+              trackId: job.targetId as any,
+            });
+            break;
           case "reccobeats_fetch":
             await ctx.runAction(internal.enrichment.enrichTrackSonicFeatures, {
               trackId: job.targetId as any,
@@ -920,7 +987,7 @@ export const enrichAllTrackArt = action({
         targetType: "track",
         targetId: track._id,
         targetName: `${track.artistName} - ${track.title}`,
-        steps: ["cover_art_archive", "reccobeats_fetch"],
+        steps: ["cover_art_archive", "spotify_match", "reccobeats_fetch"],
         priority: "normal",
       });
     }
@@ -930,8 +997,93 @@ export const enrichAllTrackArt = action({
 });
 
 // ═══════════════════════════════════════════════════════════════
+//  BATCH CORPUS SEEDING — Selective, for high-signal artists
+//  Targets artists with 3+ playlist appearances (highest graph value)
+// ═══════════════════════════════════════════════════════════════
+
+export const batchCorpusSeed = action({
+  args: {
+    limit: v.optional(v.number()),
+    minTracks: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<{ queued: number; skipped: number }> => {
+    const limit = args.limit || 800;
+    const minTracks = args.minTracks || 3;
+
+    // Get top artists by track count
+    const topArtists = await ctx.runQuery(
+      internal.enrichment.getTopArtistsByTrackCount,
+      { limit, minTracks }
+    );
+
+    let queued = 0;
+    let skipped = 0;
+
+    for (const artist of topArtists) {
+      // Skip if already corpus-seeded (check enrichment log)
+      const hasCorpusSeed = artist.enrichmentLog?.some(
+        (e: any) => e.step === "review_corpus_seed" && e.status === "success"
+      );
+      if (hasCorpusSeed) {
+        skipped++;
+        continue;
+      }
+
+      await ctx.runMutation(internal.enrichment.queueEnrichmentJobs, {
+        targetType: "artist",
+        targetId: artist._id,
+        targetName: artist.name,
+        steps: ["review_corpus_seed", "gemini_corpus_seed"],
+        priority: "low",
+      });
+      queued++;
+    }
+
+    return { queued, skipped };
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════
 //  INTERNAL QUERIES & MUTATIONS (used by actions above)
 // ═══════════════════════════════════════════════════════════════
+
+export const getTopArtistsByTrackCount = internalQuery({
+  args: { limit: v.number(), minTracks: v.number() },
+  handler: async (ctx, { limit, minTracks }) => {
+    // Get all identified+ artists
+    const identified = await ctx.db
+      .query("artists")
+      .withIndex("by_enrichmentStatus", (q) => q.eq("enrichmentStatus", "identified"))
+      .collect();
+    const metadata = await ctx.db
+      .query("artists")
+      .withIndex("by_enrichmentStatus", (q) => q.eq("enrichmentStatus", "metadata"))
+      .collect();
+    const complete = await ctx.db
+      .query("artists")
+      .withIndex("by_enrichmentStatus", (q) => q.eq("enrichmentStatus", "complete"))
+      .collect();
+
+    const allArtists = [...identified, ...metadata, ...complete];
+
+    // Count tracks per artist
+    const withCounts = await Promise.all(
+      allArtists.map(async (artist) => {
+        const tracks = await ctx.db
+          .query("tracks")
+          .withIndex("by_artistId", (q) => q.eq("artistId", artist._id))
+          .collect();
+        return { ...artist, trackCount: tracks.length };
+      })
+    );
+
+    // Filter by min tracks and sort by count descending
+    return withCounts
+      .filter((a) => a.trackCount >= minTracks)
+      .sort((a, b) => b.trackCount - a.trackCount)
+      .slice(0, limit);
+  },
+});
 
 export const getArtist = internalQuery({
   args: { artistId: v.id("artists") },

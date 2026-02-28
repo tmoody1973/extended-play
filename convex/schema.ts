@@ -604,7 +604,8 @@ export default defineSchema({
       v.literal("musicbrainz_rels"),
       v.literal("wikipedia_fetch"),
       v.literal("gemini_corpus_seed"),
-      v.literal("review_corpus_seed")
+      v.literal("review_corpus_seed"),
+      v.literal("spotify_match")
     ),
     priority: v.union(
       v.literal("critical"), // Needed for current user conversation
