@@ -160,10 +160,13 @@ export function useForceGraph({
     const [er, eg, eb] = edgeRgb;
     const [gr, gg, gb] = goldRgb;
 
+    // Max edge length — skip edges that would streak across the whole viewport
+    const maxLen2 = ((vr - vl) * 0.6) ** 2;
+
     // Batch non-highlighted edges into a single path for fewer draw calls
     if (!activeId) {
-      ctx.strokeStyle = `rgba(${er},${eg},${eb},0.2)`;
-      ctx.lineWidth = 0.8;
+      ctx.strokeStyle = `rgba(${er},${eg},${eb},0.12)`;
+      ctx.lineWidth = 0.5;
       ctx.beginPath();
       for (let i = 0; i < edges.length; i++) {
         const e = edges[i];
@@ -173,14 +176,17 @@ export function useForceGraph({
         // Viewport culling
         if (Math.max(s.x, tgt.x) < vl || Math.min(s.x, tgt.x) > vr) continue;
         if (Math.max(s.y, tgt.y) < vt2 || Math.min(s.y, tgt.y) > vb) continue;
+        // Skip excessively long edges
+        const dx = s.x - tgt.x, dy = s.y - tgt.y;
+        if (dx * dx + dy * dy > maxLen2) continue;
         ctx.moveTo(s.x, s.y);
         ctx.lineTo(tgt.x, tgt.y);
       }
       ctx.stroke();
     } else {
       // Two passes: dim edges first, then highlighted on top
-      ctx.strokeStyle = `rgba(${er},${eg},${eb},0.04)`;
-      ctx.lineWidth = 0.5;
+      ctx.strokeStyle = `rgba(${er},${eg},${eb},0.03)`;
+      ctx.lineWidth = 0.4;
       ctx.beginPath();
       for (let i = 0; i < edges.length; i++) {
         const e = edges[i];
@@ -189,15 +195,17 @@ export function useForceGraph({
         if (s.x == null || s.y == null || tgt.x == null || tgt.y == null) continue;
         if (Math.max(s.x, tgt.x) < vl || Math.min(s.x, tgt.x) > vr) continue;
         if (Math.max(s.y, tgt.y) < vt2 || Math.min(s.y, tgt.y) > vb) continue;
-        if (s.id === activeId || tgt.id === activeId) continue; // skip highlighted
+        if (s.id === activeId || tgt.id === activeId) continue;
+        const dx = s.x - tgt.x, dy = s.y - tgt.y;
+        if (dx * dx + dy * dy > maxLen2) continue;
         ctx.moveTo(s.x, s.y);
         ctx.lineTo(tgt.x, tgt.y);
       }
       ctx.stroke();
 
-      // Highlighted edges
-      ctx.strokeStyle = `rgba(${gr},${gg},${gb},0.8)`;
-      ctx.lineWidth = 1.8;
+      // Highlighted edges — only draw to nodes visible in viewport
+      ctx.strokeStyle = `rgba(${gr},${gg},${gb},0.7)`;
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
       for (let i = 0; i < edges.length; i++) {
         const e = edges[i];
@@ -205,6 +213,9 @@ export function useForceGraph({
         const tgt = e.target as GraphNode;
         if (s.x == null || s.y == null || tgt.x == null || tgt.y == null) continue;
         if (s.id !== activeId && tgt.id !== activeId) continue;
+        // Clip highlighted edges too — don't draw to off-screen nodes
+        const dx = s.x - tgt.x, dy = s.y - tgt.y;
+        if (dx * dx + dy * dy > maxLen2) continue;
         ctx.moveTo(s.x, s.y);
         ctx.lineTo(tgt.x, tgt.y);
       }

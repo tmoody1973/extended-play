@@ -381,13 +381,37 @@ export const getArtistIdsByDateRange = query({
 //  ENRICHMENT STATUS (for admin dashboard / progress tracking)
 // ═══════════════════════════════════════════════════════════════
 
-// Deprecated — use getEnrichmentMonitor instead (indexed, no full table scans)
+// Lightweight table counts + corpus stats (capped reads to avoid limits)
 export const getEnrichmentStats = query({
-  handler: async () => {
+  handler: async (ctx) => {
+    const reviews = await ctx.db.query("reviews").take(5000);
+    const tracks = await ctx.db.query("tracks").take(5000);
+    const episodes = await ctx.db.query("episodes").take(5000);
+
+    const tracksWithSpotify = tracks.filter((t) => t.spotifyTrackId).length;
+    const tracksWithYoutube = tracks.filter((t) => t.youtubeVideoId).length;
+    const tracksWithSonic = tracks.filter((t) => t.sonicFeatures).length;
+    const tracksWithArt = tracks.filter((t) => t.albumArt?.primaryUrl).length;
+
+    const reviewsBySource: Record<string, number> = {};
+    for (const r of reviews) {
+      const src = r.sourceType || "unknown";
+      reviewsBySource[src] = (reviewsBySource[src] || 0) + 1;
+    }
+
     return {
-      artistStats: { total: 0, stub: 0, identified: 0, metadata: 0, images: 0, sonic: 0, complete: 0, withImages: 0, withSonicProfile: 0 },
-      trackStats: { total: 0, raw: 0, matched: 0, artwork: 0, sonic: 0, complete: 0, withAlbumArt: 0 },
-      jobStats: { queued: 0, running: 0, completed: 0, failed: 0 },
+      counts: {
+        reviews: reviews.length,
+        tracks: tracks.length,
+        episodes: episodes.length,
+      },
+      trackEnrichment: {
+        withSpotifyId: tracksWithSpotify,
+        withYoutubeId: tracksWithYoutube,
+        withSonicFeatures: tracksWithSonic,
+        withAlbumArt: tracksWithArt,
+      },
+      reviewsBySource,
     };
   },
 });
