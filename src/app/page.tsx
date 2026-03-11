@@ -10,6 +10,7 @@ import { EpisodeSidebar } from "@/components/layout/episode-sidebar";
 import { InfluenceMap } from "@/components/graph/influence-map";
 import { ArtistDetailDrawer } from "@/components/graph/artist-detail-drawer";
 import { StoryStream } from "@/components/stream/story-stream";
+import { EpisodeWalkthrough } from "@/components/stream/episode-walkthrough";
 import { PlaylistBar } from "@/components/playlist/playlist-bar";
 import { useAgentConnection, AgentEvent } from "@/hooks/use-agent-connection";
 import { Id } from "../../convex/_generated/dataModel";
@@ -57,6 +58,7 @@ export default function Home() {
       },
     },
   ]);
+  const [walkthroughMode, setWalkthroughMode] = useState(false);
   const [isExploring, setIsExploring] = useState(false);
   const [revealedArtistIds, setRevealedArtistIds] = useState<Set<string>>(new Set());
   const [hasClickedNode, setHasClickedNode] = useState(false);
@@ -179,6 +181,23 @@ export default function Home() {
     setRevealedArtistIds(new Set()); // empty set + isExploring = full map
   }, []);
 
+  // Episode walkthrough handlers
+  const handleEpisodeSelect = useCallback((id: Id<"episodes"> | undefined) => {
+    setSelectedEpisodeId(id);
+    setWalkthroughMode(!!id);
+  }, []);
+
+  const handleCloseWalkthrough = useCallback(() => {
+    setSelectedEpisodeId(undefined);
+    setWalkthroughMode(false);
+  }, []);
+
+  const handleTellMeAbout = useCallback(() => {
+    setWalkthroughMode(false);
+    setIsExploring(true);
+    agent.startRecording();
+  }, [agent]);
+
   const handleNodeClick = (artistId: string) => {
     // Only open drawer for real Convex IDs (not demo node IDs like "1", "2")
     if (artistId.length > 10) {
@@ -231,7 +250,7 @@ export default function Home() {
       <MainLayout
         sidebar={
           <EpisodeSidebar
-            onEpisodeSelect={setSelectedEpisodeId}
+            onEpisodeSelect={handleEpisodeSelect}
             onTrackSelect={handleTrackSelect}
             onTimeRangeSelect={setSelectedTimeRange}
             activeTimeRange={selectedTimeRange}
@@ -248,7 +267,18 @@ export default function Home() {
             hasClickedNode={hasClickedNode}
           />
         }
-        stream={<StoryStream items={storyItems} />}
+        stream={
+          walkthroughMode && episodeWithTracks ? (
+            <EpisodeWalkthrough
+              episode={episodeWithTracks}
+              tracks={episodeWithTracks.tracks || []}
+              onClose={handleCloseWalkthrough}
+              onTellMeAbout={handleTellMeAbout}
+            />
+          ) : (
+            <StoryStream items={storyItems} />
+          )
+        }
       />
       <PlaylistBar
         playlistId={activePlaylistId}
