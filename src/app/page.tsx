@@ -251,8 +251,10 @@ export default function Home() {
       <VoiceBar
         isConnected={agent.isConnected}
         isRecording={agent.isRecording}
+        agentState={agent.agentState}
         transcript={agent.transcript}
         onToggleRecording={handleToggleRecording}
+        onSendText={agent.sendText}
       />
       <MainLayout
         sidebar={
