@@ -6,6 +6,8 @@ import { ArtistCard } from "./artist-card";
 import { AlbumArtCard } from "./album-art-card";
 import { EpisodeCard } from "./episode-card";
 import { SceneImageCard } from "./scene-image-card";
+import { ConnectionEvidenceCard } from "./connection-evidence-card";
+import { SonicComparisonCard } from "./sonic-comparison-card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { AgentEvent } from "@/hooks/use-agent-connection";
 
@@ -86,6 +88,28 @@ export function StoryStream({ items = [] }: StoryStreamProps) {
                   imageData={imgData.imageData as string}
                   mimeType={imgData.mimeType as string | undefined}
                   caption={imgData.caption as string | undefined}
+                />
+              );
+            }
+            case "show_evidence": {
+              const evData = item.data as Record<string, unknown> | undefined;
+              return (
+                <ConnectionEvidenceCard
+                  key={i}
+                  publication={(evData?.publication as string) || "Unknown"}
+                  excerpt={(evData?.excerpt as string) || ""}
+                  url={evData?.url as string | undefined}
+                  artistNames={evData?.artistNames as string[] | undefined}
+                />
+              );
+            }
+            case "show_sonic_comparison": {
+              const cmpData = item.data as Record<string, unknown> | undefined;
+              return (
+                <SonicComparisonCard
+                  key={i}
+                  artist1={cmpData?.artist1 as any}
+                  artist2={cmpData?.artist2 as any}
                 />
               );
             }

@@ -139,6 +139,10 @@ export default function Home() {
       case "show_image":
         setStoryItems((prev) => [...prev, event]);
         break;
+      case "show_evidence":
+      case "show_sonic_comparison":
+        setStoryItems((prev) => [...prev, event]);
+        break;
       case "highlight_node":
         setHighlightedNodeId(event.artistId as string);
         revealArtists(event.artistId as string);
