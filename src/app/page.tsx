@@ -20,44 +20,8 @@ const AGENT_WS_URL = process.env.NEXT_PUBLIC_AGENT_WS_URL || "ws://localhost:800
 export default function Home() {
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<Id<"episodes"> | undefined>();
   const [selectedArtistId, setSelectedArtistId] = useState<string | undefined>();
-  // TODO: Remove test seed after visual verification
-  const [storyItems, setStoryItems] = useState<AgentEvent[]>([
-    {
-      type: "show_narration",
-      text: "Welcome to Rhythm Lab Radio — let's dig into the crates tonight.",
-      style: "intro",
-    },
-    {
-      type: "show_episode",
-      data: {
-        title: "Rhythm Lab Radio #412 — UK Jazz Renaissance",
-        airDate: "2025-12-15",
-        description:
-          "A deep dive into the new wave of UK jazz — from Shabaka Hutchings to Nubya Garcia, tracing the thread from Blue Note to Brownswood.",
-        tracks: [
-          { _id: "seed-1", title: "Blue in Green", artistName: "Miles Davis", youtubeVideoId: "PoPL7BExSQU" },
-          { _id: "seed-2", title: "Maiden Voyage", artistName: "Herbie Hancock", youtubeVideoId: "hwuMSL4CSWY" },
-          { _id: "seed-3", title: "Everybody Loves the Sunshine", artistName: "Roy Ayers", youtubeVideoId: "M82Mg_1F0Ks" },
-          { _id: "seed-4", title: "Sun Ra Medley", artistName: "Sun Ra", youtubeVideoId: "UvPaSaVMFRg" },
-          { _id: "seed-5", title: "The Köln Concert (Pt. I)", artistName: "Keith Jarrett" },
-          { _id: "seed-6", title: "Black Gold", artistName: "Nubya Garcia", youtubeVideoId: "tGm2yiUVols" },
-          { _id: "seed-7", title: "Afro Blue", artistName: "Mongo Santamaría", youtubeVideoId: "ublSAzsF4U4" },
-          { _id: "seed-8", title: "Bumpin' on Sunset", artistName: "Wes Montgomery" },
-        ],
-      },
-    },
-    {
-      type: "show_artist",
-      artistId: "test",
-      data: {
-        name: "Nubya Garcia",
-        genres: ["uk jazz", "afrobeat", "spiritual jazz"],
-        country: "United Kingdom",
-        communityLabel: "London Jazz Scene",
-        bio: "Nubya Garcia is a London-based tenor saxophonist and composer at the forefront of the UK jazz renaissance.",
-      },
-    },
-  ]);
+  const [storyItems, setStoryItems] = useState<AgentEvent[]>([]);
+  const [showWelcome, setShowWelcome] = useState(true);
   const [walkthroughMode, setWalkthroughMode] = useState(false);
   const [isExploring, setIsExploring] = useState(false);
   const [revealedArtistIds, setRevealedArtistIds] = useState<Set<string>>(new Set());
@@ -125,23 +89,29 @@ export default function Home() {
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
       case "show_artist":
-        setStoryItems((prev) => [...prev, event]);
+        setStoryItems((prev) => [...prev.filter((item) => item.type !== "agent_activity"), event]);
         setIsExploring(true);
         revealArtists(event.artistId as string);
         break;
       case "show_episode":
-        setStoryItems((prev) => [...prev, event]);
+        setStoryItems((prev) => [...prev.filter((item) => item.type !== "agent_activity"), event]);
         setIsExploring(true);
         break;
       case "show_narration":
-        setStoryItems((prev) => [...prev, event]);
+        setStoryItems((prev) => [...prev.filter((item) => item.type !== "agent_activity"), event]);
         break;
       case "show_image":
-        setStoryItems((prev) => [...prev, event]);
+        setStoryItems((prev) => [...prev.filter((item) => item.type !== "agent_activity"), event]);
         break;
       case "show_evidence":
       case "show_sonic_comparison":
-        setStoryItems((prev) => [...prev, event]);
+        setStoryItems((prev) => [...prev.filter((item) => item.type !== "agent_activity"), event]);
+        break;
+      case "agent_activity":
+        setStoryItems((prev) => {
+          const filtered = prev.filter((item) => item.type !== "agent_activity");
+          return [...filtered, event];
+        });
         break;
       case "highlight_node":
         setHighlightedNodeId(event.artistId as string);
@@ -302,6 +272,19 @@ export default function Home() {
         onNavigateToArtist={handleNavigateToArtist}
         onAddToCrate={handleAddToCrate}
       />
+
+      {showWelcome && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-walnut/90 backdrop-blur-sm cursor-pointer"
+          onClick={() => setShowWelcome(false)}
+        >
+          <div className="text-center space-y-3">
+            <h1 className="font-editorial text-5xl text-cream tracking-tight">Extended Play</h1>
+            <p className="text-sleeve text-base">20 years of music connections.</p>
+            <p className="text-shadow text-xs mt-6 animate-pulse">Click anywhere to explore</p>
+          </div>
+        </div>
+      )}
     </AppShell>
   );
 }
