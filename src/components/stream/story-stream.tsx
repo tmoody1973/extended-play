@@ -8,6 +8,7 @@ import { EpisodeCard } from "./episode-card";
 import { SceneImageCard } from "./scene-image-card";
 import { ConnectionEvidenceCard } from "./connection-evidence-card";
 import { SonicComparisonCard } from "./sonic-comparison-card";
+import { ActivityIndicator } from "./activity-indicator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { AgentEvent } from "@/hooks/use-agent-connection";
 
@@ -113,6 +114,8 @@ export function StoryStream({ items = [] }: StoryStreamProps) {
                 />
               );
             }
+            case "agent_activity":
+              return <ActivityIndicator key={i} tool={item.tool as string} />;
             case "transcript":
               if (item.role === "agent") {
                 return (

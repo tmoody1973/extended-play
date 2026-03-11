@@ -225,6 +225,7 @@ export default function Home() {
         transcript={agent.transcript}
         onToggleRecording={handleToggleRecording}
         onSendText={agent.sendText}
+        onSendImage={agent.sendImage}
       />
       <MainLayout
         sidebar={

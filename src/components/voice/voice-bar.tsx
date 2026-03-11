@@ -10,6 +10,7 @@ interface VoiceBarProps {
   transcript: { role: string; text: string } | null;
   onToggleRecording: () => void;
   onSendText: (text: string) => void;
+  onSendImage?: (base64: string, mimeType: string) => void;
 }
 
 export function VoiceBar({
@@ -19,6 +20,7 @@ export function VoiceBar({
   transcript,
   onToggleRecording,
   onSendText,
+  onSendImage,
 }: VoiceBarProps) {
   const [textInput, setTextInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -70,6 +72,48 @@ export function VoiceBar({
           )}
         </svg>
       </button>
+
+      {/* Camera button for vision input */}
+      {onSendImage && (
+        <button
+          onClick={async () => {
+            try {
+              const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: "environment" },
+              });
+              const video = document.createElement("video");
+              video.srcObject = stream;
+              video.setAttribute("playsinline", "true");
+              await video.play();
+
+              // Wait a frame for the video to be ready
+              await new Promise((r) => setTimeout(r, 200));
+
+              const canvas = document.createElement("canvas");
+              canvas.width = video.videoWidth || 640;
+              canvas.height = video.videoHeight || 480;
+              canvas.getContext("2d")?.drawImage(video, 0, 0);
+
+              // Stop camera
+              stream.getTracks().forEach((t) => t.stop());
+
+              const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+              const base64 = dataUrl.split(",")[1];
+              if (base64) {
+                onSendImage(base64, "image/jpeg");
+              }
+            } catch {
+              // Camera not available — fail silently
+            }
+          }}
+          className="w-9 h-9 rounded-full flex items-center justify-center bg-shelf text-sleeve hover:text-cream hover:bg-edge transition-colors flex-shrink-0"
+          aria-label="Take photo"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M6.5 1.5a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 .5.5V2h3A1.5 1.5 0 0 1 14 3.5v8a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-8A1.5 1.5 0 0 1 3.5 2h3V1.5zM8 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />
+          </svg>
+        </button>
+      )}
 
       {/* Agent thinking indicator */}
       {agentState === "agent_thinking" && (
