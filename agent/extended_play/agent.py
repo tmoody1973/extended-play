@@ -5,6 +5,7 @@ from .tools.episodes import list_episodes, get_episode
 from .tools.reviews import search_reviews
 from .tools.corpus import seed_artist_corpus
 from .tools.playlists import create_playlist, add_to_playlist
+from .tools.images import generate_scene_image
 
 root_agent = Agent(
     model="gemini-2.0-flash-live-001",
@@ -22,5 +23,6 @@ root_agent = Agent(
         seed_artist_corpus,
         create_playlist,
         add_to_playlist,
+        generate_scene_image,
     ],
 )
