@@ -5,6 +5,7 @@ import { NarrationCard } from "./narration-card";
 import { ArtistCard } from "./artist-card";
 import { AlbumArtCard } from "./album-art-card";
 import { EpisodeCard } from "./episode-card";
+import { SceneImageCard } from "./scene-image-card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { AgentEvent } from "@/hooks/use-agent-connection";
 
@@ -74,6 +75,17 @@ export function StoryStream({ items = [] }: StoryStreamProps) {
                     youtubeVideoId: t.youtubeVideoId,
                     position: t.position,
                   }))}
+                />
+              );
+            }
+            case "show_image": {
+              const imgData = item as Record<string, unknown>;
+              return (
+                <SceneImageCard
+                  key={i}
+                  imageData={imgData.imageData as string}
+                  mimeType={imgData.mimeType as string | undefined}
+                  caption={imgData.caption as string | undefined}
                 />
               );
             }
