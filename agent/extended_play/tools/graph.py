@@ -24,12 +24,12 @@ async def explore_artist(artist_name: str) -> dict:
     return {"status": "success", "artist": card}
 
 
-async def get_connections(artist_name: str, depth: int = 2) -> dict:
+async def get_connections(artist_name: str, depth: int = 1) -> dict:
     """Get the subgraph of connections around an artist, showing how they relate to other artists.
 
     Args:
         artist_name: The name of the artist to center the graph on.
-        depth: How many hops from the center artist to include (1-3). Default 2.
+        depth: How many hops from the center artist to include (1-2). Default 1.
 
     Returns:
         Graph with nodes (artists) and edges (connections) around the specified artist.
@@ -39,10 +39,31 @@ async def get_connections(artist_name: str, depth: int = 2) -> dict:
         return {"status": "error", "message": f"No artist found matching '{artist_name}'"}
 
     artist_id = results[0]["id"]
-    subgraph = await query("queries:getArtistSubgraph", {
-        "artistId": artist_id,
-        "depth": min(depth, 3),
-    })
+    try:
+        subgraph = await query("queries:getArtistSubgraph", {
+            "artistId": artist_id,
+            "depth": min(depth, 2),
+        })
+    except Exception:
+        return {"status": "success", "center": artist_name, "subgraph": {
+            "nodes": [{"id": artist_id, "name": artist_name}],
+            "edges": [],
+        }}
+
+    # Trim to top connections by weight to avoid huge payloads
+    if isinstance(subgraph, dict):
+        edges = subgraph.get("edges", [])
+        if len(edges) > 15:
+            edges = sorted(edges, key=lambda e: e.get("weight", 0), reverse=True)[:15]
+            # Keep only nodes referenced by kept edges
+            kept_ids = {artist_id}
+            for e in edges:
+                kept_ids.add(e.get("source", ""))
+                kept_ids.add(e.get("target", ""))
+            nodes = [n for n in subgraph.get("nodes", []) if n.get("id") in kept_ids]
+            # Strip heavy fields from nodes
+            nodes = [{"id": n.get("id"), "name": n.get("name"), "genres": n.get("genres", [])[:3]} for n in nodes]
+            subgraph = {"nodes": nodes, "edges": edges}
 
     return {"status": "success", "center": artist_name, "subgraph": subgraph}
 

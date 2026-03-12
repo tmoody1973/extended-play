@@ -6,7 +6,7 @@ import httpx
 CONVEX_URL = os.environ.get("CONVEX_URL", "")
 
 
-async def query(path: str, args: dict | None = None) -> dict:
+async def query(path: str, args: dict | None = None):
     """Call a Convex query function via HTTP.
 
     Args:
@@ -14,7 +14,7 @@ async def query(path: str, args: dict | None = None) -> dict:
         args: Arguments to pass to the function
 
     Returns:
-        The query result as a dict.
+        The unwrapped query result (list, dict, or primitive).
     """
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -23,10 +23,11 @@ async def query(path: str, args: dict | None = None) -> dict:
             timeout=15.0,
         )
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        return data.get("value", data) if isinstance(data, dict) else data
 
 
-async def mutation(path: str, args: dict | None = None) -> dict:
+async def mutation(path: str, args: dict | None = None):
     """Call a Convex mutation function via HTTP."""
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -35,10 +36,11 @@ async def mutation(path: str, args: dict | None = None) -> dict:
             timeout=15.0,
         )
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        return data.get("value", data) if isinstance(data, dict) else data
 
 
-async def action(path: str, args: dict | None = None) -> dict:
+async def action(path: str, args: dict | None = None):
     """Call a Convex action function via HTTP."""
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -47,4 +49,5 @@ async def action(path: str, args: dict | None = None) -> dict:
             timeout=30.0,
         )
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        return data.get("value", data) if isinstance(data, dict) else data

@@ -253,7 +253,7 @@ function MonitorPanel() {
     running: number;
     completed: number;
     failed: number;
-  }> = monitor.steps ?? [];
+  }> = Array.isArray(monitor.steps) ? monitor.steps : [];
 
   const totalFailed = steps.reduce((sum, s) => sum + s.failed, 0);
 
@@ -286,19 +286,19 @@ function MonitorPanel() {
                 {/* Counts */}
                 <div className="grid grid-cols-4 gap-2 text-xs font-data">
                   <div>
-                    <span className="text-shadow">Queued</span>
+                    <span className="text-sleeve">Queued</span>
                     <p className="text-cream">{step.queued}</p>
                   </div>
                   <div>
-                    <span className="text-shadow">Running</span>
+                    <span className="text-sleeve">Running</span>
                     <p className="text-vinyl-blue">{step.running}</p>
                   </div>
                   <div>
-                    <span className="text-shadow">Done</span>
+                    <span className="text-sleeve">Done</span>
                     <p className="text-led-green">{step.completed}</p>
                   </div>
                   <div>
-                    <span className="text-shadow">Failed</span>
+                    <span className="text-sleeve">Failed</span>
                     <p className="text-skip-red">{step.failed}</p>
                   </div>
                 </div>
@@ -347,24 +347,29 @@ function StatsPanel() {
     return <p className="text-sleeve text-sm">Loading stats...</p>;
   }
 
+  const a = stats.artistStats ?? {};
+  const t = stats.trackStats ?? {};
+  const g = stats.graphStats ?? {};
+  const j = stats.jobStats ?? {};
+
   const cards = [
     {
       title: "Artists",
       items: [
-        { label: "Total", value: stats.artistStats.total, accent: true },
-        { label: "Stubs", value: stats.artistStats.stub },
-        { label: "Identified", value: stats.artistStats.identified },
-        { label: "Complete", value: stats.artistStats.complete },
-        { label: "With images", value: stats.artistStats.withImages },
+        { label: "Total", value: a.total ?? 0, accent: true },
+        { label: "Stubs", value: a.stub ?? 0 },
+        { label: "Identified", value: a.identified ?? 0 },
+        { label: "Complete", value: a.complete ?? 0 },
+        { label: "With images", value: a.withImages ?? 0 },
       ],
     },
     {
       title: "Tracks",
       items: [
-        { label: "Total", value: stats.trackStats.total, accent: true },
-        { label: "Raw", value: stats.trackStats.raw },
-        { label: "With art", value: stats.trackStats.withAlbumArt },
-        { label: "Complete", value: stats.trackStats.complete },
+        { label: "Total", value: t.total ?? 0, accent: true },
+        { label: "Raw", value: t.raw ?? 0 },
+        { label: "With art", value: t.withAlbumArt ?? 0 },
+        { label: "Complete", value: t.complete ?? 0 },
       ],
     },
     {
@@ -372,32 +377,32 @@ function StatsPanel() {
       items: [
         {
           label: "Connections",
-          value: stats.graphStats?.connections ?? 0,
+          value: g.connections ?? 0,
           accent: true,
         },
         {
           label: "Communities",
-          value: stats.graphStats?.communities ?? 0,
+          value: g.communities ?? 0,
         },
         {
           label: "Bridge artists",
-          value: stats.graphStats?.bridgeArtists ?? 0,
+          value: g.bridgeArtists ?? 0,
         },
       ],
     },
     {
       title: "Jobs",
       items: [
-        { label: "Queued", value: stats.jobStats.queued, accent: true },
-        { label: "Running", value: stats.jobStats.running },
+        { label: "Queued", value: j.queued ?? 0, accent: true },
+        { label: "Running", value: j.running ?? 0 },
         {
           label: "Completed",
-          value: stats.jobStats.completed,
+          value: j.completed ?? 0,
           color: "text-led-green",
         },
         {
           label: "Failed",
-          value: stats.jobStats.failed,
+          value: j.failed ?? 0,
           color: "text-skip-red",
         },
       ],

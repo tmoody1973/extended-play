@@ -4,7 +4,11 @@ import asyncio
 import json
 import os
 import base64
+import logging
 from contextlib import asynccontextmanager
+
+logger = logging.getLogger("extended_play")
+logging.basicConfig(level=logging.INFO)
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -45,6 +49,40 @@ async def health():
     return {"status": "ok", "service": "extended-play-agent"}
 
 
+@app.get("/ws-test")
+async def ws_test_page():
+    """Minimal browser WebSocket test page."""
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse("""
+    <html><body>
+    <h2>WebSocket Test</h2>
+    <button onclick="doConnect()">Connect</button>
+    <button onclick="doSend()">Send Hello</button>
+    <pre id="log"></pre>
+    <script>
+    let ws;
+    const log = s => document.getElementById('log').textContent += s + '\\n';
+    function doConnect() {
+        ws = new WebSocket('ws://localhost:8000/ws/default/browser-test');
+        ws.binaryType = 'arraybuffer';
+        ws.onopen = () => log('OPEN');
+        ws.onclose = e => log('CLOSE code=' + e.code + ' reason=' + e.reason + ' wasClean=' + e.wasClean);
+        ws.onerror = e => log('ERROR ' + JSON.stringify(e));
+        ws.onmessage = e => {
+            if (e.data instanceof ArrayBuffer) log('BINARY ' + e.data.byteLength + ' bytes');
+            else log('MSG: ' + e.data.substring(0, 100));
+        };
+    }
+    function doSend() {
+        if (!ws || ws.readyState !== 1) { log('Not connected'); return; }
+        ws.send(JSON.stringify({type: 'text', text: 'hello'}));
+        log('Sent hello');
+    }
+    </script>
+    </body></html>
+    """)
+
+
 @app.websocket("/ws/{user_id}/{session_id}")
 async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
     await ws.accept()
@@ -80,8 +118,10 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
                     break
 
                 if "bytes" in data and data["bytes"]:
-                    # Raw PCM audio bytes from browser
-                    live_request_queue.send_realtime(data["bytes"])
+                    # Raw PCM audio bytes from browser — wrap in Blob for ADK
+                    live_request_queue.send_realtime(
+                        Blob(data=data["bytes"], mime_type="audio/pcm;rate=16000")
+                    )
                 elif "text" in data and data["text"]:
                     msg = json.loads(data["text"])
 
@@ -91,7 +131,9 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
                     elif msg.get("type") == "audio":
                         # Base64-encoded audio fallback
                         audio_bytes = base64.b64decode(msg["data"])
-                        live_request_queue.send_realtime(audio_bytes)
+                        live_request_queue.send_realtime(
+                            Blob(data=audio_bytes, mime_type="audio/pcm;rate=16000")
+                        )
                     elif msg.get("type") == "image":
                         # Vision input
                         image_bytes = base64.b64decode(msg["data"])
@@ -118,8 +160,13 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
             ):
                 await _process_event(ws, event)
         except Exception as e:
+            error_msg = str(e)
+            is_context_overflow = "context window" in error_msg or "32000" in error_msg
             try:
-                await ws.send_text(json.dumps({"type": "error", "message": str(e)}))
+                await ws.send_text(json.dumps({
+                    "type": "session_expired" if is_context_overflow else "error",
+                    "message": "Session full — reconnect to continue." if is_context_overflow else error_msg,
+                }))
             except Exception:
                 pass
 
@@ -138,8 +185,18 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
 async def _process_event(ws: WebSocket, event):
     """Extract audio, transcripts, tool results from ADK Events and emit to frontend."""
     try:
+        # Log event type for debugging
+        event_attrs = [a for a in dir(event) if not a.startswith("_")]
+        has_content = hasattr(event, "content") and event.content
+        has_actions = hasattr(event, "actions") and event.actions
+
+        if has_actions or (hasattr(event, "tool_calls") and event.tool_calls):
+            logger.info(f"[EVENT] attrs={event_attrs}")
+            if has_actions:
+                logger.info(f"[EVENT] actions={event.actions}")
+
         # Audio and text content
-        if hasattr(event, "content") and event.content and hasattr(event.content, "parts"):
+        if has_content and hasattr(event.content, "parts"):
             for part in (event.content.parts or []):
                 if hasattr(part, "inline_data") and part.inline_data and part.inline_data.data:
                     audio_b64 = base64.b64encode(part.inline_data.data).decode()
@@ -157,56 +214,90 @@ async def _process_event(ws: WebSocket, event):
 
         # Input transcription (user speech-to-text)
         if hasattr(event, "input_transcription") and event.input_transcription:
-            await ws.send_text(json.dumps({
-                "type": "transcript",
-                "role": "user",
-                "text": event.input_transcription,
-            }))
+            tx = event.input_transcription
+            text = getattr(tx, "text", None) or str(tx)
+            if text:
+                await ws.send_text(json.dumps({
+                    "type": "transcript",
+                    "role": "user",
+                    "text": text,
+                }))
 
         # Output transcription (agent speech-to-text)
         if hasattr(event, "output_transcription") and event.output_transcription:
-            await ws.send_text(json.dumps({
-                "type": "transcript",
-                "role": "agent",
-                "text": event.output_transcription,
-            }))
+            tx = event.output_transcription
+            text = getattr(tx, "text", None) or str(tx)
+            if text:
+                await ws.send_text(json.dumps({
+                    "type": "transcript",
+                    "role": "agent",
+                    "text": text,
+                }))
 
         # Interruption
         if hasattr(event, "interrupted") and event.interrupted:
             await ws.send_text(json.dumps({"type": "interrupted"}))
 
-        # Tool call activity (for UI indicators)
+        # Tool call activity — check multiple possible attribute names
+        function_calls = None
         if hasattr(event, "tool_calls") and event.tool_calls:
-            for tc in event.tool_calls:
+            function_calls = event.tool_calls
+        elif has_content and hasattr(event.content, "parts"):
+            for part in (event.content.parts or []):
+                if hasattr(part, "function_call") and part.function_call:
+                    if function_calls is None:
+                        function_calls = []
+                    function_calls.append(part.function_call)
+
+        if function_calls:
+            for tc in function_calls:
                 tool_name = getattr(tc, "name", None) or getattr(tc, "function_name", "unknown")
+                logger.info(f"[TOOL CALL] {tool_name}")
                 await ws.send_text(json.dumps({
                     "type": "agent_activity",
                     "tool": tool_name,
                     "status": "running",
                 }))
 
-        # Tool results -> UI events
-        if hasattr(event, "actions") and event.actions:
+        # Tool results -> UI events — check multiple possible locations
+        tool_results = []
+        if has_actions:
             tool_results = getattr(event.actions, "tool_results", None) or []
-            for tr in tool_results:
-                await _emit_ui_event(ws, tr)
+        # Also check content parts for function_response
+        if has_content and hasattr(event.content, "parts"):
+            for part in (event.content.parts or []):
+                if hasattr(part, "function_response") and part.function_response:
+                    tool_results.append(part.function_response)
 
-    except Exception:
-        pass
+        for tr in tool_results:
+            logger.info(f"[TOOL RESULT] name={getattr(tr, 'name', '?')}")
+            await _emit_ui_event(ws, tr)
+
+    except Exception as e:
+        logger.error(f"[EVENT ERROR] {e}", exc_info=True)
 
 
 async def _emit_ui_event(ws: WebSocket, tool_result):
     """Translate tool results into frontend UI events."""
     try:
         name = getattr(tool_result, "name", "") or ""
-        raw_result = getattr(tool_result, "result", {})
+        # Handle both ADK tool_result and Gemini function_response formats
+        raw_result = getattr(tool_result, "result", None) or getattr(tool_result, "response", {})
         if isinstance(raw_result, str):
             try:
                 result = json.loads(raw_result)
             except (json.JSONDecodeError, TypeError):
                 return
-        else:
+        elif isinstance(raw_result, dict):
             result = raw_result
+        else:
+            # Try converting proto-like objects to dict
+            try:
+                result = dict(raw_result) if raw_result else {}
+            except (TypeError, ValueError):
+                return
+
+        logger.info(f"[UI EVENT] tool={name} status={result.get('status')} keys={list(result.keys()) if isinstance(result, dict) else '?'}")
 
         if not isinstance(result, dict) or result.get("status") != "success":
             return

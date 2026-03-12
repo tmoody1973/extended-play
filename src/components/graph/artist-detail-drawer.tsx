@@ -1,6 +1,7 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useState } from "react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Id } from "../../../convex/_generated/dataModel";
 import {
@@ -10,7 +11,7 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet";
 import { VisuallyHidden } from "radix-ui";
-import { Play, Pause } from "lucide-react";
+import { Play, Pause, Pencil, X, Check, RefreshCw } from "lucide-react";
 import { colors, communityColors } from "@/lib/theme";
 import { useAudioPlayer, type PlayableTrack } from "@/contexts/audio-player-context";
 import {
@@ -63,12 +64,210 @@ function SonicRadar({ profile }: { profile: Record<string, number> }) {
   );
 }
 
+function ArtistEditForm({
+  artist,
+  artistId,
+  onDone,
+}: {
+  artist: any;
+  artistId: string;
+  onDone: () => void;
+}) {
+  const updateArtist = useMutation((api as any).admin.updateArtistOverride);
+  const reidentify = useAction((api as any).admin.reidentifyFromMusicBrainzUrl);
+  const [form, setForm] = useState({
+    name: artist.name ?? "",
+    bio: artist.bio ?? "",
+    country: artist.country ?? "",
+    genres: (artist.genres ?? []).join(", "),
+    imageUrl: artist.images?.primary?.url ?? "",
+  });
+  const [mbUrl, setMbUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [reidentifying, setReidentifying] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const handleReidentify = async () => {
+    if (!mbUrl.trim()) return;
+    setReidentifying(true);
+    setMessage(null);
+    try {
+      const result = await reidentify({
+        artistId: artistId as Id<"artists">,
+        musicbrainzUrl: mbUrl.trim(),
+      });
+      setMessage({
+        type: "success",
+        text: `Re-identified as "${result.artistName}"${result.country ? ` (${result.country})` : ""}${result.disambiguation ? ` — ${result.disambiguation}` : ""}. Enrichment re-queued.`,
+      });
+      setMbUrl("");
+      // Close after a moment so the user sees the success message
+      setTimeout(() => onDone(), 2000);
+    } catch (err: any) {
+      setMessage({ type: "error", text: err.message ?? "Re-identify failed" });
+    } finally {
+      setReidentifying(false);
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const args: Record<string, any> = {
+        artistId: artistId as Id<"artists">,
+      };
+      if (form.name !== (artist.name ?? "")) args.name = form.name;
+      if (form.bio !== (artist.bio ?? "")) args.bio = form.bio;
+      if (form.country !== (artist.country ?? "")) args.country = form.country;
+      const newGenres = form.genres
+        .split(",")
+        .map((g: string) => g.trim())
+        .filter(Boolean);
+      const oldGenres = (artist.genres ?? []).join(", ");
+      if (form.genres !== oldGenres) args.genres = newGenres;
+      if (form.imageUrl !== (artist.images?.primary?.url ?? ""))
+        args.imageUrl = form.imageUrl;
+
+      await updateArtist(args);
+      onDone();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inputClass =
+    "w-full bg-shelf border border-edge rounded px-2 py-1.5 text-cream text-xs font-data focus:outline-none focus:border-gold";
+
+  return (
+    <div className="px-4 py-4 space-y-3">
+      <div className="flex items-center justify-between mb-1">
+        <h3 className="text-amber font-editorial text-sm font-bold">
+          Edit Artist
+        </h3>
+        <button onClick={onDone} className="text-sleeve hover:text-cream">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* MusicBrainz re-identify section */}
+      <div className="border border-vinyl-blue/30 rounded-lg p-3 bg-vinyl-blue/5">
+        <label className="text-vinyl-blue text-[10px] font-data uppercase block mb-1">
+          MusicBrainz URL (re-identify + re-enrich)
+        </label>
+        <div className="flex gap-2">
+          <input
+            className={`${inputClass} flex-1 border-vinyl-blue/30`}
+            value={mbUrl}
+            onChange={(e) => setMbUrl(e.target.value)}
+            placeholder="https://musicbrainz.org/artist/..."
+          />
+          <button
+            onClick={handleReidentify}
+            disabled={!mbUrl.trim() || reidentifying}
+            className="px-3 py-1.5 rounded text-xs font-data bg-vinyl-blue text-walnut hover:bg-vinyl-blue/80 disabled:opacity-50 flex items-center gap-1.5 whitespace-nowrap"
+          >
+            <RefreshCw className={`w-3 h-3 ${reidentifying ? "animate-spin" : ""}`} />
+            {reidentifying ? "Fetching..." : "Re-identify"}
+          </button>
+        </div>
+        <p className="text-sleeve text-[9px] font-data mt-1.5">
+          Paste the correct MusicBrainz artist page URL to replace all metadata and re-run enrichment.
+        </p>
+      </div>
+
+      {message && (
+        <div
+          className={`text-xs font-data p-2 rounded ${
+            message.type === "success"
+              ? "bg-led-green/10 text-led-green border border-led-green/30"
+              : "bg-skip-red/10 text-skip-red border border-skip-red/30"
+          }`}
+        >
+          {message.text}
+        </div>
+      )}
+
+      <div className="border-t border-edge pt-3">
+        <p className="text-sleeve text-[9px] font-data mb-3 uppercase tracking-wider">
+          Or manually override fields
+        </p>
+      </div>
+
+      <div>
+        <label className="text-sleeve text-[10px] font-data uppercase block mb-1">
+          Name
+        </label>
+        <input
+          className={inputClass}
+          value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })}
+        />
+      </div>
+
+      <div>
+        <label className="text-sleeve text-[10px] font-data uppercase block mb-1">
+          Country
+        </label>
+        <input
+          className={inputClass}
+          value={form.country}
+          onChange={(e) => setForm({ ...form, country: e.target.value })}
+        />
+      </div>
+
+      <div>
+        <label className="text-sleeve text-[10px] font-data uppercase block mb-1">
+          Genres (comma-separated)
+        </label>
+        <input
+          className={inputClass}
+          value={form.genres}
+          onChange={(e) => setForm({ ...form, genres: e.target.value })}
+        />
+      </div>
+
+      <div>
+        <label className="text-sleeve text-[10px] font-data uppercase block mb-1">
+          Image URL
+        </label>
+        <input
+          className={inputClass}
+          value={form.imageUrl}
+          onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
+        />
+      </div>
+
+      <div>
+        <label className="text-sleeve text-[10px] font-data uppercase block mb-1">
+          Bio
+        </label>
+        <textarea
+          className={`${inputClass} min-h-[80px] resize-y`}
+          value={form.bio}
+          onChange={(e) => setForm({ ...form, bio: e.target.value })}
+        />
+      </div>
+
+      <button
+        onClick={handleSave}
+        disabled={saving}
+        className="w-full py-2 rounded-md font-editorial font-bold text-sm uppercase tracking-wider bg-amber text-walnut hover:bg-amber/80 disabled:opacity-50 flex items-center justify-center gap-2"
+      >
+        <Check className="w-3.5 h-3.5" />
+        {saving ? "Saving..." : "Save Override"}
+      </button>
+    </div>
+  );
+}
+
 export function ArtistDetailDrawer({
   artistId,
   onClose,
   onNavigateToArtist,
   onAddToCrate,
 }: ArtistDetailDrawerProps) {
+  const [editingArtistId, setEditingArtistId] = useState<string | null>(null);
+  const isEditing = editingArtistId === artistId;
   const { currentTrack, isPlaying, play, pause, resume } = useAudioPlayer();
 
   const artist = useQuery(
@@ -122,6 +321,14 @@ export function ArtistDetailDrawer({
         </VisuallyHidden.Root>
         {artist ? (
           <div className="flex flex-col">
+            {isEditing ? (
+              <ArtistEditForm
+                artist={artist}
+                artistId={artistId!}
+                onDone={() => setEditingArtistId(null)}
+              />
+            ) : (
+            <>
             {/* ── Hero banner ── */}
             <div className="relative h-36 overflow-hidden bg-walnut">
               {artist.images?.fanartBackground ? (
@@ -162,9 +369,18 @@ export function ArtistDetailDrawer({
                   )}
                 </div>
                 <div className="mb-1">
-                  <h2 className="text-cream text-lg font-editorial font-bold leading-tight">
-                    {artist.name}
-                  </h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-cream text-lg font-editorial font-bold leading-tight">
+                      {artist.name}
+                    </h2>
+                    <button
+                      onClick={() => setEditingArtistId(artistId!)}
+                      className="text-sleeve hover:text-amber transition-colors"
+                      title="Edit artist details"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                  </div>
                   <div className="flex items-center gap-2 text-xs text-sleeve mt-0.5">
                     {location && <span>{location}</span>}
                     {location && activeYears && <span>·</span>}
@@ -370,6 +586,8 @@ export function ArtistDetailDrawer({
                   + Add to Crate
                 </button>
               </div>
+            )}
+            </>
             )}
           </div>
         ) : (

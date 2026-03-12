@@ -32,6 +32,7 @@ export function useAgentConnection({
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
+  const nextPlayTimeRef = useRef(0);
   const sessionIdRef = useRef(sessionId || crypto.randomUUID());
 
   const getWsUrl = useCallback(() => {
@@ -42,6 +43,7 @@ export function useAgentConnection({
   const playAudioBytes = useCallback(async (bytes: Uint8Array) => {
     if (!playbackContextRef.current) {
       playbackContextRef.current = new AudioContext({ sampleRate: 24000 });
+      nextPlayTimeRef.current = 0;
     }
     const ctx = playbackContextRef.current;
     const int16 = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
@@ -54,7 +56,10 @@ export function useAgentConnection({
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(ctx.destination);
-    source.start();
+    // Schedule chunks sequentially — each starts after the previous ends
+    const startTime = Math.max(ctx.currentTime, nextPlayTimeRef.current);
+    source.start(startTime);
+    nextPlayTimeRef.current = startTime + buffer.duration;
   }, []);
 
   const playAudioBase64 = useCallback(async (b64Data: string) => {
@@ -69,20 +74,27 @@ export function useAgentConnection({
   const stopPlayback = useCallback(() => {
     playbackContextRef.current?.close();
     playbackContextRef.current = null;
+    nextPlayTimeRef.current = 0;
   }, []);
 
   const connect = useCallback(async () => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    // Clean up any existing connection first
+    if (wsRef.current) {
+      if (wsRef.current.readyState === WebSocket.OPEN) return;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
 
     const ws = new WebSocket(getWsUrl());
     wsRef.current = ws;
     ws.binaryType = "arraybuffer";
 
-    ws.onopen = () => setIsConnected(true);
+    // Attach ALL handlers BEFORE awaiting open to avoid missing early messages
     ws.onclose = () => {
       setIsConnected(false);
       setIsRecording(false);
       setAgentState("idle");
+      wsRef.current = null;
     };
 
     ws.onmessage = async (event) => {
@@ -112,11 +124,39 @@ export function useAgentConnection({
           setAgentState("agent_thinking");
           onEvent(msg);
           break;
+        case "session_expired":
+          // Context window full — reconnect with fresh session
+          wsRef.current?.close();
+          wsRef.current = null;
+          sessionIdRef.current = crypto.randomUUID();
+          setIsConnected(false);
+          // Auto-reconnect after a brief pause
+          setTimeout(() => { connect(); }, 300);
+          break;
         default:
           onEvent(msg);
           break;
       }
     };
+
+    // Now wait for connection to open
+    await new Promise<void>((resolve) => {
+      ws.addEventListener("open", () => {
+        setIsConnected(true);
+        resolve();
+      }, { once: true });
+      ws.addEventListener("error", () => {
+        setTimeout(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            setIsConnected(true);
+            resolve();
+          } else {
+            setIsConnected(false);
+            resolve();
+          }
+        }, 500);
+      }, { once: true });
+    });
   }, [getWsUrl, onEvent, playAudioBytes, playAudioBase64, stopPlayback]);
 
   const startRecording = useCallback(async () => {
@@ -132,7 +172,7 @@ export function useAgentConnection({
     const audioContext = new AudioContext({ sampleRate: 16000 });
     audioContextRef.current = audioContext;
     const source = audioContext.createMediaStreamSource(stream);
-    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    const processor = audioContext.createScriptProcessor(512, 1, 1);
     processorRef.current = processor;
 
     processor.onaudioprocess = (e) => {

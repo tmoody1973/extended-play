@@ -1392,6 +1392,32 @@ export const queueEnrichmentJobs = internalMutation({
   },
 });
 
+// Delete all reviews + clear stale bio/images for an artist being re-identified
+export const clearArtistStaleData = internalMutation({
+  args: { artistId: v.id("artists") },
+  handler: async (ctx, { artistId }) => {
+    // Delete all reviews linked to this artist
+    const reviews = await ctx.db
+      .query("reviews")
+      .withIndex("by_primaryArtist", (q) => q.eq("primaryArtistId", artistId))
+      .collect();
+    for (const review of reviews) {
+      await ctx.db.delete(review._id);
+    }
+
+    // Clear stale fields that came from the wrong MusicBrainz match
+    await ctx.db.patch(artistId, {
+      bio: undefined,
+      images: undefined,
+      discogsId: undefined,
+      geniusId: undefined,
+      sonicProfile: undefined,
+    });
+
+    return { deletedReviews: reviews.length };
+  },
+});
+
 // ═══════════════════════════════════════════════════════════════
 //  NER CO-MENTION EXTRACTION — The Stell-R Core Loop
 //  Extracts artist mentions from review text, creates co-mention edges

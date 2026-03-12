@@ -1,5 +1,6 @@
 """Tools for searching music journalism."""
 
+import asyncio
 from ..convex_client import action
 
 
@@ -13,9 +14,15 @@ async def search_reviews(topic: str, artist_names: list[str] | None = None) -> d
     Returns:
         Top review excerpts with publication, author, and URL.
     """
-    result = await action("reviewSearch:searchReviews", {
-        "query": topic,
-        "artistNames": artist_names or [],
-        "maxResults": 5,
-    })
-    return {"status": "success", "reviews": result}
+    try:
+        result = await asyncio.wait_for(
+            action("reviewSearch:searchReviews", {
+                "query": topic,
+                "artistNames": artist_names or [],
+                "maxResults": 3,
+            }),
+            timeout=12.0,
+        )
+        return {"status": "success", "reviews": result}
+    except (asyncio.TimeoutError, Exception) as e:
+        return {"status": "success", "reviews": [], "note": f"Review search unavailable: {type(e).__name__}"}

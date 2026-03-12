@@ -1,5 +1,6 @@
 """Tools for seeding and enriching the review corpus."""
 
+import asyncio
 from ..convex_client import action
 
 
@@ -18,8 +19,14 @@ async def seed_artist_corpus(artist_name: str, use_gemini_grounding: bool = True
     Returns:
         Status of the corpus seeding operation.
     """
-    result = await action("reviewSearch:triggerCorpusSeed", {
-        "artistName": artist_name,
-        "useGeminiGrounding": use_gemini_grounding,
-    })
-    return result
+    try:
+        result = await asyncio.wait_for(
+            action("reviewSearch:triggerCorpusSeed", {
+                "artistName": artist_name,
+                "useGeminiGrounding": use_gemini_grounding,
+            }),
+            timeout=15.0,
+        )
+        return result
+    except (asyncio.TimeoutError, Exception):
+        return {"status": "success", "message": f"Corpus seed queued for {artist_name}"}

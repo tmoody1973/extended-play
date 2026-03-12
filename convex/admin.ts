@@ -714,6 +714,134 @@ export const forceReenrichArtist = mutation({
   },
 });
 
+// ═══════════════════════════════════════════════════════════════
+// Admin: Re-identify Artist from MusicBrainz URL
+// Fetches correct data from a known-good MBID and re-queues enrichment
+// ═══════════════════════════════════════════════════════════════
+
+export const reidentifyFromMusicBrainzUrl = action({
+  args: {
+    artistId: v.id("artists"),
+    musicbrainzUrl: v.string(),
+  },
+  handler: async (ctx, { artistId, musicbrainzUrl }) => {
+    const mbidMatch = musicbrainzUrl.match(
+      /(?:musicbrainz\.org\/artist\/)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
+    );
+    if (!mbidMatch) {
+      throw new Error(
+        "Invalid MusicBrainz URL. Expected format: https://musicbrainz.org/artist/<uuid>"
+      );
+    }
+    const mbid = mbidMatch[1];
+
+    const resp = await fetch(
+      `https://musicbrainz.org/ws/2/artist/${mbid}?inc=tags&fmt=json`,
+      {
+        headers: {
+          "User-Agent": "RhythmLabExtended/1.0 (contact@rhythmlab.com)",
+        },
+      }
+    );
+    if (!resp.ok) {
+      throw new Error(`MusicBrainz lookup failed: ${resp.status}`);
+    }
+    const mb = await resp.json();
+
+    // Clear old reviews, bio, images from the wrong match
+    await ctx.runMutation(internal.enrichment.clearArtistStaleData, {
+      artistId,
+    });
+
+    await ctx.runMutation(internal.enrichment.updateArtistEnrichment, {
+      artistId,
+      updates: {
+        musicbrainzId: mb.id,
+        name: mb.name,
+        sortName: mb["sort-name"],
+        country: mb.country,
+        disambiguation: mb.disambiguation,
+        activeYearBegin: mb["life-span"]?.begin
+          ? parseInt(mb["life-span"].begin.substring(0, 4))
+          : undefined,
+        activeYearEnd:
+          mb["life-span"]?.ended && mb["life-span"]?.end
+            ? parseInt(mb["life-span"].end.substring(0, 4))
+            : undefined,
+        genres: mb.tags
+          ? mb.tags.slice(0, 10).map((t: any) => t.name)
+          : undefined,
+        enrichmentStatus: "identified" as const,
+      },
+      logEntry: {
+        step: "musicbrainz_lookup",
+        status: "success" as const,
+        timestamp: Date.now(),
+        details: `Manual re-identify: ${mb.name} (MBID: ${mb.id})`,
+      },
+    });
+
+    await ctx.runMutation(internal.enrichment.queueEnrichmentJobs, {
+      targetType: "artist",
+      targetId: artistId,
+      targetName: mb.name,
+      steps: [
+        "musicbrainz_rels",
+        "discogs_fetch",
+        "genius_fetch",
+        "fanart_tv_fetch",
+        "wikimedia_fetch",
+        "youtube_match",
+        "wikipedia_fetch",
+      ],
+      priority: "high",
+    });
+
+    return {
+      status: "success",
+      artistName: mb.name,
+      mbid: mb.id,
+      country: mb.country,
+      disambiguation: mb.disambiguation,
+    };
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Admin: Edit Artist Override
+// ═══════════════════════════════════════════════════════════════
+
+export const updateArtistOverride = mutation({
+  args: {
+    artistId: v.id("artists"),
+    name: v.optional(v.string()),
+    bio: v.optional(v.string()),
+    country: v.optional(v.string()),
+    genres: v.optional(v.array(v.string())),
+    imageUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const artist = await ctx.db.get(args.artistId);
+    if (!artist) throw new Error("Artist not found");
+
+    const patch: Record<string, any> = {};
+    if (args.name !== undefined) patch.name = args.name;
+    if (args.bio !== undefined) patch.bio = args.bio;
+    if (args.country !== undefined) patch.country = args.country;
+    if (args.genres !== undefined) patch.genres = args.genres;
+    if (args.imageUrl !== undefined) {
+      patch.images = {
+        ...(artist.images ?? {}),
+        primary: { url: args.imageUrl, source: "manual" as const },
+        thumbnail: { url: args.imageUrl, source: "manual" },
+      };
+    }
+
+    await ctx.db.patch(args.artistId, patch);
+    return { status: "success", artistId: args.artistId };
+  },
+});
+
 // Re-enrich all artists that already have MusicBrainz IDs but are missing images
 // Queues only image-related steps; the cron picks them up rate-limited
 export const reEnrichAllArtistImages = mutation({
@@ -847,15 +975,15 @@ export const _saveGraphSnapshot = internalMutation({
       .first();
     const version = (latestSnapshot?.version ?? 0) + 1;
 
-    // Helper: split JSON into chunks under 900KB
+    // Helper: split JSON into chunks under 400KB (safe margin for 1MiB doc limit)
     function chunkJson(json: string, field: "nodesJson" | "edgesJson" | "nodeImagesJson") {
       const chunks: Array<Record<string, any>> = [];
-      if (json.length < 900_000) {
+      if (json.length < 400_000) {
         chunks.push({ [field]: json });
       } else {
         const arr = JSON.parse(json);
         const entries = Array.isArray(arr) ? arr : Object.entries(arr);
-        const perChunk = Math.ceil(entries.length / Math.ceil(json.length / 800_000));
+        const perChunk = Math.ceil(entries.length / Math.ceil(json.length / 350_000));
         for (let i = 0; i < entries.length; i += perChunk) {
           const slice = entries.slice(i, i + perChunk);
           const value = Array.isArray(arr) ? slice : Object.fromEntries(slice);
@@ -1149,3 +1277,4 @@ export const backfillEpisodeDates = mutation({
     };
   },
 });
+
