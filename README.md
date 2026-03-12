@@ -10,6 +10,8 @@ Built by **Tarik Moody** (host of Rhythm Lab Radio, Milwaukee WI) for the [Gemin
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
+**Live:** [extended-play-278027424812.us-central1.run.app](https://extended-play-278027424812.us-central1.run.app)
+
 ---
 
 ## Why Extended Play
@@ -49,7 +51,7 @@ The curator responds in conversational voice, zooms the graph to highlight the p
 - **Playlist Builder** — Curate tracks through conversation, export to Spotify, Apple Music, YouTube Music, or .m3u
 - **Enrichment Pipeline** — Automatic metadata from MusicBrainz, Discogs, Fanart.tv, Cover Art Archive, Spotify, and ReccoBeats
 - **Multi-Source Connection Pipeline** — Influence edges from 6 sources: playlist co-play, MusicBrainz relationships, Discogs member/group data, Wikipedia associated acts, Gemini Grounding, and Exa/Tavily review search with NER co-mention extraction (Stell-R methodology)
-- **Admin Dashboard** — Paste-to-ingest playlist parser with enrichment status monitoring
+- **Admin Dashboard** — Paste-to-ingest playlist parser, enrichment status monitoring, artist edit/override with MusicBrainz re-identification
 - **Reactive Data** — All UI updates in real-time via Convex subscriptions, zero polling
 
 ---
@@ -98,8 +100,8 @@ The curator responds in conversational voice, zooms the graph to highlight the p
 | Frontend | Next.js 16 (App Router, React Compiler) |
 | Backend / DB | Convex (reactive queries, mutations, actions, crons) |
 | Agent | Google Cloud Run + Gemini Live API (bidirectional audio) |
-| Agent SDK | Google ADK + GenAI SDK |
-| AI Models | Gemini 2.5 Flash (voice), Gemini 3.1 Flash Image Preview (visuals) |
+| Agent SDK | Google ADK (Runner + LiveRequestQueue pattern) |
+| AI Models | Gemini Live 2.5 Flash Native Audio (voice), Gemini 3.1 Flash Image Preview (visuals) |
 | Graph | D3.js v7 (force simulation, Canvas rendering) |
 | UI Components | shadcn/ui + Radix UI |
 | Styling | Tailwind CSS v4 |
@@ -209,8 +211,7 @@ extended-play/
 ├── agent/                         # Voice agent (Python, Cloud Run)
 │   ├── main.py                    # FastAPI server + WebSocket endpoint
 │   ├── extended_play/
-│   │   ├── live_session.py        # Gemini Live bidi-streaming session
-│   │   ├── agent.py               # Agent orchestration
+│   │   ├── agent.py               # ADK Agent definition (11 tools, Gemini Live model)
 │   │   ├── convex_client.py       # Convex HTTP client
 │   │   ├── prompts.py             # System prompts + persona
 │   │   └── tools/                 # ADK tool definitions
@@ -227,7 +228,7 @@ extended-play/
 │   ├── queries.ts                 # Graph, artist, episode, enrichment queries
 │   ├── enrichment.ts              # 5-layer enrichment pipeline + NER + connections
 │   ├── ingest.ts                  # Episode + tracklist ingestion
-│   ├── admin.ts                   # Admin dashboard + graph snapshot builder
+│   ├── admin.ts                   # Admin dashboard, graph snapshot, artist edit/re-identify
 │   ├── playlists.ts               # Playlist CRUD + export
 │   ├── reviewSearch.ts            # Exa AI + Tavily review search + corpus seeding
 │   ├── geminiGrounding.ts         # Vertex AI Grounding + corpus seeding
@@ -357,8 +358,8 @@ export CONVEX_URL=https://your-deployment.convex.cloud
 ```
 
 This deploys two Cloud Run services:
-- `extended-play-agent` — Python/FastAPI WebSocket server for Gemini Live
-- `extended-play-web` — Next.js frontend
+- `extended-play-agent` — Python/FastAPI WebSocket server for Gemini Live (`wss://extended-play-agent-278027424812.us-central1.run.app/ws`)
+- `extended-play` — Next.js frontend (`https://extended-play-278027424812.us-central1.run.app`)
 
 ---
 
@@ -386,9 +387,9 @@ This deploys two Cloud Run services:
 
 - [x] Public code repository with setup instructions
 - [x] Google Cloud deployment (Cloud Run)
-- [ ] Architecture diagram
+- [x] Architecture diagram
 - [ ] Demo video (under 4 minutes)
-- [ ] Text description of features and technologies
+- [x] Text description of features and technologies
 
 ---
 
