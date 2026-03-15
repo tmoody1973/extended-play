@@ -32,6 +32,8 @@ interface AudioPlayerActions {
   resume: () => void;
   stop: () => void;
   seek: (percent: number) => void;
+  duck: () => void;
+  unduck: () => void;
 }
 
 type AudioPlayerContextValue = AudioPlayerState & AudioPlayerActions;
@@ -102,6 +104,9 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
         playsinline: 1,
       },
       events: {
+        onReady: () => {
+          playerRef.current?.setVolume?.(25);
+        },
         onStateChange: (event: { data: number }) => {
           const state = event.data;
           if (state === YT_PLAYING) {
@@ -200,6 +205,18 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  // Volume ducking — lower music volume when agent is speaking
+  const FULL_VOLUME = 25;
+  const DUCKED_VOLUME = 8;
+
+  const duck = useCallback(() => {
+    playerRef.current?.setVolume?.(DUCKED_VOLUME);
+  }, []);
+
+  const unduck = useCallback(() => {
+    playerRef.current?.setVolume?.(FULL_VOLUME);
+  }, []);
+
   return (
     <AudioPlayerContext.Provider
       value={{
@@ -213,6 +230,8 @@ export function AudioPlayerProvider({ children }: { children: ReactNode }) {
         resume,
         stop,
         seek,
+        duck,
+        unduck,
       }}
     >
       {/* Hidden YouTube player container — off-screen */}

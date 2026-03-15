@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { AppShell } from "@/components/layout/app-shell";
@@ -13,6 +13,7 @@ import { StoryStream } from "@/components/stream/story-stream";
 import { EpisodeWalkthrough } from "@/components/stream/episode-walkthrough";
 import { PlaylistBar } from "@/components/playlist/playlist-bar";
 import { useAgentConnection, AgentEvent } from "@/hooks/use-agent-connection";
+import { useAudioPlayer } from "@/contexts/audio-player-context";
 import { Id } from "../../convex/_generated/dataModel";
 
 const AGENT_WS_URL = process.env.NEXT_PUBLIC_AGENT_WS_URL || "ws://localhost:8000/ws";
@@ -143,6 +144,16 @@ export default function Home() {
     agentUrl: AGENT_WS_URL,
     onEvent: handleAgentEvent,
   });
+
+  // Volume ducking — lower YouTube music when agent is speaking
+  const { duck, unduck } = useAudioPlayer();
+  useEffect(() => {
+    if (agent.agentState === "agent_speaking") {
+      duck();
+    } else {
+      unduck();
+    }
+  }, [agent.agentState, duck, unduck]);
 
   const handleToggleRecording = () => {
     if (agent.isRecording) {

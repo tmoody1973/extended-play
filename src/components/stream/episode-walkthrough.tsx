@@ -13,9 +13,11 @@ import {
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { useAudioPlayer, type PlayableTrack } from "@/contexts/audio-player-context";
 import {
   X,
   Play,
+  Pause,
   Mic,
   ChevronDown,
   Music,
@@ -247,53 +249,120 @@ function TrackRow({
   track: TrackData;
   position: number;
 }) {
+  const { currentTrack, isPlaying, play, pause, resume } = useAudioPlayer();
+  const [showSpotify, setShowSpotify] = useState(false);
+
+  const isActive = currentTrack?.id === track._id;
+  const isTrackPlaying = isActive && isPlaying;
+
   const handlePlayClick = () => {
-    // Placeholder — AudioPlayerContext will be wired in a future task
-    console.log("Play track:", track.title, track.youtubeVideoId);
+    if (!track.youtubeVideoId) {
+      // No YouTube — toggle Spotify embed instead
+      if (track.spotifyTrackId) setShowSpotify((prev) => !prev);
+      return;
+    }
+
+    const playable: PlayableTrack = {
+      id: track._id,
+      title: track.title,
+      artistName: track.artistName,
+      albumArtUrl: track.albumArtUrl,
+      youtubeVideoId: track.youtubeVideoId,
+    };
+
+    if (isActive && isTrackPlaying) {
+      pause();
+    } else if (isActive) {
+      resume();
+    } else {
+      play(playable);
+    }
   };
 
   return (
-    <div className="group flex items-center gap-2.5 py-1.5 px-2 rounded-md hover:bg-shelf/70 transition-colors">
-      {/* Position number */}
-      <span className="w-5 text-right text-shadow text-[11px] font-data flex-shrink-0">
-        {position}
-      </span>
+    <div>
+      <div className="group flex items-center gap-2.5 py-1.5 px-2 rounded-md hover:bg-shelf/70 transition-colors">
+        {/* Position number */}
+        <span className="w-5 text-right text-shadow text-[11px] font-data flex-shrink-0">
+          {position}
+        </span>
 
-      {/* Album art thumbnail */}
-      {track.albumArtUrl ? (
-        <img
-          src={track.albumArtUrl}
-          alt=""
-          className="w-8 h-8 rounded object-cover flex-shrink-0"
-        />
-      ) : (
-        <div className="w-8 h-8 rounded bg-shelf flex-shrink-0 flex items-center justify-center">
-          <Music className="w-3 h-3 text-shadow" />
+        {/* Album art thumbnail */}
+        {track.albumArtUrl ? (
+          <img
+            src={track.albumArtUrl}
+            alt=""
+            className="w-8 h-8 rounded object-cover flex-shrink-0"
+          />
+        ) : (
+          <div className="w-8 h-8 rounded bg-shelf flex-shrink-0 flex items-center justify-center">
+            <Music className="w-3 h-3 text-shadow" />
+          </div>
+        )}
+
+        {/* Track info */}
+        <div className="flex-1 min-w-0">
+          <p className={cn(
+            "text-xs font-medium truncate leading-tight",
+            isActive ? "text-gold" : "text-cream"
+          )}>
+            {track.title}
+          </p>
+          <p className="text-sleeve text-[11px] truncate leading-tight">
+            {track.artistName}
+          </p>
         </div>
-      )}
 
-      {/* Track info */}
-      <div className="flex-1 min-w-0">
-        <p className="text-cream text-xs font-medium truncate leading-tight">
-          {track.title}
-        </p>
-        <p className="text-sleeve text-[11px] truncate leading-tight">
-          {track.artistName}
-        </p>
+        {/* Spotify badge — click to toggle embed */}
+        {track.spotifyTrackId && (
+          <button
+            onClick={() => setShowSpotify((prev) => !prev)}
+            className={cn(
+              "flex-shrink-0 text-[9px] font-data px-1.5 py-0.5 rounded-full border transition-colors",
+              showSpotify
+                ? "border-led-green/40 text-led-green bg-led-green/10"
+                : "border-edge text-sleeve hover:text-led-green hover:border-led-green/30"
+            )}
+          >
+            Spotify
+          </button>
+        )}
+
+        {/* Play button */}
+        {(track.youtubeVideoId || track.spotifyTrackId) && (
+          <button
+            onClick={handlePlayClick}
+            className={cn(
+              "flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full transition-all",
+              isActive
+                ? "text-amber"
+                : "text-sleeve hover:text-amber opacity-0 group-hover:opacity-100"
+            )}
+            aria-label={`Play ${track.title}`}
+          >
+            {isTrackPlaying ? (
+              <Pause className="w-3.5 h-3.5" fill="currentColor" />
+            ) : (
+              <Play className="w-3.5 h-3.5" fill="currentColor" />
+            )}
+          </button>
+        )}
       </div>
 
-      {/* Play button — visible on hover */}
-      <button
-        onClick={handlePlayClick}
-        className={cn(
-          "flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full",
-          "text-sleeve hover:text-amber transition-all",
-          "opacity-0 group-hover:opacity-100"
-        )}
-        aria-label={`Play ${track.title}`}
-      >
-        <Play className="w-3.5 h-3.5" fill="currentColor" />
-      </button>
+      {/* Spotify embed — compact player */}
+      {showSpotify && track.spotifyTrackId && (
+        <div className="ml-8 mr-2 my-1">
+          <iframe
+            src={`https://open.spotify.com/embed/track/${track.spotifyTrackId}?utm_source=generator&theme=0`}
+            width="100%"
+            height="80"
+            frameBorder="0"
+            allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+            loading="lazy"
+            style={{ borderRadius: "12px" }}
+          />
+        </div>
+      )}
     </div>
   );
 }
