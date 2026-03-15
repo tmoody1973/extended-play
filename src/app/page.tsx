@@ -256,7 +256,11 @@ export default function Home() {
               onTellMeAbout={handleTellMeAbout}
             />
           ) : (
-            <StoryStream items={storyItems} />
+            <StoryStream items={storyItems} onSendText={(text) => {
+              setShowWelcome(false);
+              setIsExploring(true);
+              agent.sendText(text);
+            }} />
           )
         }
       />
@@ -276,13 +280,26 @@ export default function Home() {
 
       {showWelcome && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-walnut/90 backdrop-blur-sm cursor-pointer"
-          onClick={() => setShowWelcome(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-walnut/95 backdrop-blur-md cursor-pointer"
+          onClick={() => {
+            setShowWelcome(false);
+          }}
         >
-          <div className="text-center space-y-3">
-            <h1 className="font-editorial text-5xl text-cream tracking-tight">Extended Play</h1>
-            <p className="text-sleeve text-base">20 years of music connections.</p>
-            <p className="text-shadow text-xs mt-6 animate-pulse">Click anywhere to explore</p>
+          <div className="text-center space-y-4 animate-[fade-in_1.5s_ease-out]">
+            <p className="text-amber/60 text-xs font-data uppercase tracking-[0.3em] animate-[fade-in_2s_ease-out]">
+              Rhythm Lab Radio presents
+            </p>
+            <h1 className="font-editorial text-6xl md:text-7xl text-cream tracking-tight">
+              Extended Play
+            </h1>
+            <p className="text-sleeve text-base font-editorial italic">
+              20 years of music connections, explored through conversation.
+            </p>
+            <div className="pt-6">
+              <p className="text-shadow/60 text-xs animate-pulse">
+                Click to enter
+              </p>
+            </div>
           </div>
         </div>
       )}
