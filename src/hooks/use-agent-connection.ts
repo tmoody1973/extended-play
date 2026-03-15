@@ -72,6 +72,10 @@ export function useAgentConnection({
           setAgentState("agent_thinking");
           onEvent(msg);
           break;
+        case "walkthrough_loading":
+        case "walkthrough_ready":
+          onEvent(msg);
+          break;
         case "session_expired":
           wsRef.current?.close();
           wsRef.current = null;

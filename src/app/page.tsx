@@ -352,7 +352,12 @@ export default function Home() {
           />
         }
         stream={
-          directorMode && walkthroughData ? (
+          walkthroughLoading ? (
+            <div className="flex flex-col items-center justify-center h-full gap-4">
+              <div className="w-8 h-8 border-2 border-gold/30 border-t-gold rounded-full animate-spin" />
+              <p className="text-sleeve text-sm font-editorial italic">Curating your episode...</p>
+            </div>
+          ) : directorMode && walkthroughData ? (
             <DirectorWalkthrough
               data={walkthroughData}
               onComplete={handleDirectorComplete}
@@ -369,11 +374,6 @@ export default function Home() {
               onClose={handleCloseWalkthrough}
               onTellMeAbout={handleTellMeAbout}
             />
-          ) : walkthroughLoading ? (
-            <div className="flex flex-col items-center justify-center h-full gap-4">
-              <div className="w-8 h-8 border-2 border-gold/30 border-t-gold rounded-full animate-spin" />
-              <p className="text-sleeve text-sm font-editorial italic">Curating your episode...</p>
-            </div>
           ) : (
             <StoryStream items={storyItems} onSendText={(text) => {
               setShowWelcome(false);
