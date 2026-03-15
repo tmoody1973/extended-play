@@ -14,22 +14,22 @@ export function ConnectionEvidenceCard({
   artistNames,
 }: ConnectionEvidenceCardProps) {
   return (
-    <div className="bg-wood border border-edge rounded-lg p-3">
-      <div className="flex items-center gap-2 mb-2">
-        <div className="w-5 h-5 rounded bg-vinyl-blue/20 flex items-center justify-center">
-          <span className="text-vinyl-blue text-[10px] font-data">
+    <div className="rounded-lg bg-shelf/50 p-4 border-l-2 border-vinyl-blue">
+      <div className="flex items-center gap-2 mb-3">
+        <div className="w-6 h-6 rounded-full bg-vinyl-blue/20 flex items-center justify-center">
+          <span className="text-vinyl-blue text-[11px] font-editorial font-bold">
             {publication.charAt(0).toUpperCase()}
           </span>
         </div>
-        <span className="text-sleeve text-xs font-data uppercase">{publication}</span>
+        <span className="text-vinyl-blue text-xs font-data uppercase tracking-wider">{publication}</span>
       </div>
-      <blockquote className="text-cream text-sm italic leading-relaxed border-l-2 border-amber pl-3">
+      <blockquote className="text-cream text-[15px] italic leading-relaxed font-editorial">
         &ldquo;{excerpt}&rdquo;
       </blockquote>
       {artistNames && artistNames.length > 0 && (
-        <div className="flex gap-1 mt-2 flex-wrap">
+        <div className="flex gap-1.5 mt-3 flex-wrap">
           {artistNames.map((name) => (
-            <span key={name} className="text-[10px] font-data px-1.5 py-0.5 bg-shelf rounded text-sleeve">
+            <span key={name} className="text-[10px] font-data px-2 py-0.5 rounded-full bg-vinyl-blue/10 text-vinyl-blue/80 border border-vinyl-blue/20">
               {name}
             </span>
           ))}
@@ -40,7 +40,7 @@ export function ConnectionEvidenceCard({
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-vinyl-blue text-xs font-data mt-2 inline-block hover:underline"
+          className="text-vinyl-blue/70 text-xs font-data mt-3 inline-block hover:text-vinyl-blue transition-colors"
         >
           Read full article &rarr;
         </a>
