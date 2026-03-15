@@ -6,6 +6,7 @@ from .tools.reviews import search_reviews
 from .tools.corpus import seed_artist_corpus
 from .tools.playlists import create_playlist, add_to_playlist
 from .tools.images import generate_scene_image
+from .tools.storyteller import tell_story
 
 root_agent = Agent(
     model="gemini-live-2.5-flash-native-audio",
@@ -24,5 +25,6 @@ root_agent = Agent(
         create_playlist,
         add_to_playlist,
         generate_scene_image,
+        tell_story,
     ],
 )

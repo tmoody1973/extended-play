@@ -25,6 +25,7 @@ from google.adk.agents.live_request_queue import LiveRequestQueue
 from google.genai.types import Blob, Content, Part
 
 from extended_play.agent import root_agent
+from extended_play.tools.storyteller import _active_ws
 
 APP_NAME = "extended_play"
 session_service = InMemorySessionService()
@@ -162,6 +163,9 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
     )
 
     turn_state = TurnState()
+
+    # Make WebSocket available to storyteller tool via context var
+    _active_ws.set(ws)
 
     async def upstream_task():
         """Receive from WebSocket, push to LiveRequestQueue."""
@@ -439,6 +443,11 @@ async def _emit_ui_event(ws: WebSocket, tool_result):
                         "type": "highlight_node",
                         "artistId": bridge.get("_id") or bridge.get("id"),
                     }))
+
+        elif name == "tell_story":
+            # tell_story streams its own events directly via WebSocket
+            # Just log the summary
+            logger.info(f"[STORYTELLER] parts={result.get('parts_count')} text={result.get('text_segments')} images={result.get('image_segments')}")
 
         elif name == "create_playlist":
             await ws.send_text(json.dumps({
