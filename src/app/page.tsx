@@ -33,6 +33,30 @@ export default function Home() {
   >();
   const [activePlaylistId, setActivePlaylistId] = useState<Id<"playlists"> | undefined>();
   const narrationBufferRef = useRef("");
+  const ttsQueueRef = useRef<string[]>([]);
+  const isSpeakingRef = useRef(false);
+
+  // TTS: speak narration text using Web Speech API
+  const speakText = useCallback((text: string) => {
+    ttsQueueRef.current.push(text);
+    if (isSpeakingRef.current) return; // already processing queue
+
+    const processQueue = () => {
+      if (ttsQueueRef.current.length === 0) {
+        isSpeakingRef.current = false;
+        return;
+      }
+      isSpeakingRef.current = true;
+      const next = ttsQueueRef.current.shift()!;
+      const utterance = new SpeechSynthesisUtterance(next);
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      utterance.onend = processQueue;
+      utterance.onerror = processQueue;
+      window.speechSynthesis.speak(utterance);
+    };
+    processQueue();
+  }, []);
 
   // Reactive playlist subscription — updates automatically when agent mutates
   const playlistData = useQuery(
@@ -105,20 +129,13 @@ export default function Home() {
       case "show_narration": {
         const text = (event.text as string) || "";
         if (!text.trim()) break;
-        // Accumulate narration fragments into a single card
-        narrationBufferRef.current += (narrationBufferRef.current ? " " : "") + text.trim();
-        const accumulated = narrationBufferRef.current;
-        setStoryItems((prev) => {
-          const withoutActivity = prev.filter((item) => item.type !== "agent_activity");
-          // Replace the last narration card if it exists, otherwise add new
-          const lastIdx = withoutActivity.findLastIndex((item) => item.type === "show_narration");
-          if (lastIdx >= 0) {
-            const updated = [...withoutActivity];
-            updated[lastIdx] = { type: "show_narration", text: accumulated };
-            return updated;
-          }
-          return [...withoutActivity, { type: "show_narration", text: accumulated }];
-        });
+        // Each show_narration from tell_story is a complete paragraph — add as new card
+        setStoryItems((prev) => [
+          ...prev.filter((item) => item.type !== "agent_activity"),
+          event,
+        ]);
+        // Speak it aloud via TTS
+        speakText(text.trim());
         break;
       }
       case "show_image":
@@ -159,29 +176,10 @@ export default function Home() {
         }
         break;
       case "transcript":
-        // Agent transcript from voice — accumulate into narration card
-        if (event.role === "agent") {
-          const tText = (event.text as string) || "";
-          if (!tText.trim()) break;
-          narrationBufferRef.current += (narrationBufferRef.current ? " " : "") + tText.trim();
-          const accText = narrationBufferRef.current;
-          setStoryItems((prev) => {
-            const withoutActivity = prev.filter((item) => item.type !== "agent_activity");
-            const lastIdx = withoutActivity.findLastIndex((item) => item.type === "show_narration");
-            if (lastIdx >= 0) {
-              const updated = [...withoutActivity];
-              updated[lastIdx] = { type: "show_narration", text: accText };
-              return updated;
-            }
-            return [...withoutActivity, { type: "show_narration", text: accText }];
-          });
-        } else if (event.role === "user") {
-          // User spoke — reset buffer for agent's response
-          narrationBufferRef.current = "";
-        }
+        // Voice transcripts — just for the voice bar, not story stream
         break;
     }
-  }, [revealArtists]);
+  }, [revealArtists, speakText]);
 
   const agent = useAgentConnection({
     agentUrl: AGENT_WS_URL,
