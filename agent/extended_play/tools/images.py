@@ -45,7 +45,7 @@ async def generate_scene_image(
             client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
 
         response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash-preview-image-generation",
+            model="gemini-3.1-flash-image-preview",
             contents=prompt,
             config=genai.types.GenerateContentConfig(
                 response_modalities=["IMAGE", "TEXT"],

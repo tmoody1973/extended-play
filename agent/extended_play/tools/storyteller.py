@@ -21,7 +21,7 @@ logger = logging.getLogger("extended_play")
 # Context var to pass the WebSocket into tool calls without changing ADK signatures
 _active_ws: contextvars.ContextVar = contextvars.ContextVar("active_ws", default=None)
 
-STORYTELLER_MODEL = "gemini-2.0-flash-preview-image-generation"
+STORYTELLER_MODEL = "gemini-3.1-flash-image-preview"
 
 STORY_SYSTEM = """You are the curator of Extended Play — a Tokyo record bar built on 20 years of Rhythm Lab Radio playlists curated by Tarik Moody out of Milwaukee.
 
