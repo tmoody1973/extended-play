@@ -5,6 +5,7 @@ import json
 import os
 import base64
 import logging
+import time
 import uuid
 from contextlib import asynccontextmanager
 
@@ -84,6 +85,59 @@ async def ws_test_page():
     """)
 
 
+# ─── Auto-continue: waits for silence, then prompts agent to keep going ───
+
+CONTINUE_PROMPTS = [
+    "Keep going — show me visuals, play connections on the graph, and find reviews. Don't stop until you've shown at least 3 different things.",
+    "Continue exploring — call another tool to show more. Dig deeper into the connections.",
+    "You're on a roll — keep the story going. Show me something I wouldn't expect.",
+]
+
+
+class TurnState:
+    """Track activity within a turn to enable auto-continue after silence."""
+
+    def __init__(self):
+        self.last_audio_time: float = 0
+        self.last_tool_time: float = 0
+        self.tools_called: list[str] = []
+        self.continues_sent: int = 0
+        self.max_continues: int = 3
+        self.active: bool = False  # True after user message, False after max continues
+
+    def on_audio(self):
+        self.last_audio_time = time.time()
+
+    def on_tool(self, name: str):
+        self.tools_called.append(name)
+        self.last_tool_time = time.time()
+
+    def on_user_message(self):
+        self.tools_called = []
+        self.continues_sent = 0
+        self.active = True
+        self.last_audio_time = time.time()
+        self.last_tool_time = 0
+
+    def should_continue(self) -> bool:
+        if not self.active:
+            return False
+        if self.continues_sent >= self.max_continues:
+            self.active = False
+            return False
+        # Need at least 1 tool or audio event to have happened
+        if not self.tools_called and self.last_audio_time == 0:
+            return False
+        # Wait for silence: 3s since last audio/tool activity
+        elapsed = time.time() - max(self.last_audio_time, self.last_tool_time)
+        return elapsed >= 3.0
+
+    def get_continue_prompt(self) -> str:
+        idx = min(self.continues_sent, len(CONTINUE_PROMPTS) - 1)
+        self.continues_sent += 1
+        return CONTINUE_PROMPTS[idx]
+
+
 @app.websocket("/ws/{user_id}/{session_id}")
 async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
     await ws.accept()
@@ -107,6 +161,8 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
         response_modalities=["AUDIO"],
     )
 
+    turn_state = TurnState()
+
     async def upstream_task():
         """Receive from WebSocket, push to LiveRequestQueue."""
         try:
@@ -124,6 +180,7 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
                     msg = json.loads(data["text"])
 
                     if msg.get("type") == "text":
+                        turn_state.on_user_message()
                         content = Content(role="user", parts=[Part(text=msg["text"])])
                         live_request_queue.send_content(content)
                     elif msg.get("type") == "audio":
@@ -146,6 +203,22 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
         finally:
             live_request_queue.close()
 
+    async def auto_continue_task():
+        """Poll for silence and send continuation prompts."""
+        try:
+            while True:
+                await asyncio.sleep(1.0)
+                if turn_state.should_continue():
+                    prompt = turn_state.get_continue_prompt()
+                    logger.info(f"[AUTO-CONTINUE #{turn_state.continues_sent}] {prompt[:60]}...")
+                    live_request_queue.send_content(
+                        Content(role="user", parts=[Part(text=prompt)])
+                    )
+                    # Reset timers so we wait another 3s before next continue
+                    turn_state.last_audio_time = time.time()
+        except asyncio.CancelledError:
+            pass
+
     async def downstream_task():
         """run_live yields Events; serialize and send to WebSocket."""
         try:
@@ -154,7 +227,7 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
                 live_request_queue=live_request_queue,
                 run_config=run_config,
             ):
-                await _process_event(ws, event)
+                await _process_event(ws, event, turn_state)
         except Exception as e:
             error_msg = str(e)
             is_context_overflow = "context window" in error_msg or "32000" in error_msg
@@ -168,6 +241,7 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
 
     upstream = asyncio.create_task(upstream_task())
     downstream = asyncio.create_task(downstream_task())
+    auto_cont = asyncio.create_task(auto_continue_task())
 
     try:
         await asyncio.gather(upstream, downstream)
@@ -176,9 +250,10 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
     finally:
         upstream.cancel()
         downstream.cancel()
+        auto_cont.cancel()
 
 
-async def _process_event(ws: WebSocket, event):
+async def _process_event(ws: WebSocket, event, turn_state: TurnState):
     """Extract audio, transcripts, tool results from ADK Events and emit to frontend."""
     try:
         has_content = hasattr(event, "content") and event.content
@@ -188,6 +263,7 @@ async def _process_event(ws: WebSocket, event):
         if has_content and hasattr(event.content, "parts"):
             for part in (event.content.parts or []):
                 if hasattr(part, "inline_data") and part.inline_data and part.inline_data.data:
+                    turn_state.on_audio()
                     audio_b64 = base64.b64encode(part.inline_data.data).decode()
                     await ws.send_text(json.dumps({
                         "type": "audio",
@@ -210,6 +286,7 @@ async def _process_event(ws: WebSocket, event):
             tx = event.input_transcription
             text = getattr(tx, "text", None) or str(tx)
             if text and text.strip():
+                turn_state.on_user_message()
                 await ws.send_text(json.dumps({
                     "type": "transcript",
                     "role": "user",
@@ -218,16 +295,13 @@ async def _process_event(ws: WebSocket, event):
 
         # Output transcription (agent speech-to-text)
         if hasattr(event, "output_transcription") and event.output_transcription:
+            turn_state.on_audio()
             tx = event.output_transcription
             text = getattr(tx, "text", None) or str(tx)
             if text and text.strip():
                 await ws.send_text(json.dumps({
                     "type": "transcript",
                     "role": "agent",
-                    "text": text,
-                }))
-                await ws.send_text(json.dumps({
-                    "type": "show_narration",
                     "text": text,
                 }))
 
@@ -250,6 +324,7 @@ async def _process_event(ws: WebSocket, event):
             for tc in function_calls:
                 tool_name = getattr(tc, "name", None) or getattr(tc, "function_name", "unknown")
                 logger.info(f"[TOOL CALL] {tool_name}")
+                turn_state.on_tool(tool_name)
                 await ws.send_text(json.dumps({
                     "type": "agent_activity",
                     "tool": tool_name,

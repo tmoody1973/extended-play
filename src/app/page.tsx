@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { AppShell } from "@/components/layout/app-shell";
@@ -32,6 +32,7 @@ export default function Home() {
     { startTimestamp: number; endTimestamp: number } | undefined
   >();
   const [activePlaylistId, setActivePlaylistId] = useState<Id<"playlists"> | undefined>();
+  const narrationBufferRef = useRef("");
 
   // Reactive playlist subscription — updates automatically when agent mutates
   const playlistData = useQuery(
@@ -93,19 +94,36 @@ export default function Home() {
         setStoryItems((prev) => [...prev.filter((item) => item.type !== "agent_activity"), event]);
         setIsExploring(true);
         revealArtists(event.artistId as string);
+        // New visual content arrived — reset narration buffer for next segment
+        narrationBufferRef.current = "";
         break;
       case "show_episode":
         setStoryItems((prev) => [...prev.filter((item) => item.type !== "agent_activity"), event]);
         setIsExploring(true);
+        narrationBufferRef.current = "";
         break;
       case "show_narration": {
         const text = (event.text as string) || "";
         if (!text.trim()) break;
-        setStoryItems((prev) => [...prev.filter((item) => item.type !== "agent_activity"), event]);
+        // Accumulate narration fragments into a single card
+        narrationBufferRef.current += (narrationBufferRef.current ? " " : "") + text.trim();
+        const accumulated = narrationBufferRef.current;
+        setStoryItems((prev) => {
+          const withoutActivity = prev.filter((item) => item.type !== "agent_activity");
+          // Replace the last narration card if it exists, otherwise add new
+          const lastIdx = withoutActivity.findLastIndex((item) => item.type === "show_narration");
+          if (lastIdx >= 0) {
+            const updated = [...withoutActivity];
+            updated[lastIdx] = { type: "show_narration", text: accumulated };
+            return updated;
+          }
+          return [...withoutActivity, { type: "show_narration", text: accumulated }];
+        });
         break;
       }
       case "show_image":
         setStoryItems((prev) => [...prev.filter((item) => item.type !== "agent_activity"), event]);
+        narrationBufferRef.current = "";
         break;
       case "show_evidence":
       case "show_sonic_comparison":
@@ -138,6 +156,28 @@ export default function Home() {
       case "add_to_playlist":
         if (event.playlistId) {
           setActivePlaylistId(event.playlistId as Id<"playlists">);
+        }
+        break;
+      case "transcript":
+        // Agent transcript from voice — accumulate into narration card
+        if (event.role === "agent") {
+          const tText = (event.text as string) || "";
+          if (!tText.trim()) break;
+          narrationBufferRef.current += (narrationBufferRef.current ? " " : "") + tText.trim();
+          const accText = narrationBufferRef.current;
+          setStoryItems((prev) => {
+            const withoutActivity = prev.filter((item) => item.type !== "agent_activity");
+            const lastIdx = withoutActivity.findLastIndex((item) => item.type === "show_narration");
+            if (lastIdx >= 0) {
+              const updated = [...withoutActivity];
+              updated[lastIdx] = { type: "show_narration", text: accText };
+              return updated;
+            }
+            return [...withoutActivity, { type: "show_narration", text: accText }];
+          });
+        } else if (event.role === "user") {
+          // User spoke — reset buffer for agent's response
+          narrationBufferRef.current = "";
         }
         break;
     }
