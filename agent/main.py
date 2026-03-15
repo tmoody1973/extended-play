@@ -5,7 +5,6 @@ import json
 import os
 import base64
 import logging
-import time
 import uuid
 from contextlib import asynccontextmanager
 
@@ -25,7 +24,7 @@ from google.adk.agents.live_request_queue import LiveRequestQueue
 from google.genai.types import Blob, Content, Part
 
 from extended_play.agent import root_agent
-from extended_play.tools.storyteller import _active_ws
+from extended_play.tools import storyteller
 
 APP_NAME = "extended_play"
 session_service = InMemorySessionService()
@@ -52,103 +51,19 @@ async def health():
     return {"status": "ok", "service": "extended-play-agent"}
 
 
-@app.get("/ws-test")
-async def ws_test_page():
-    """Minimal browser WebSocket test page."""
-    from fastapi.responses import HTMLResponse
-    return HTMLResponse("""
-    <html><body>
-    <h2>WebSocket Test</h2>
-    <button onclick="doConnect()">Connect</button>
-    <button onclick="doSend()">Send Hello</button>
-    <pre id="log"></pre>
-    <script>
-    let ws;
-    const log = s => document.getElementById('log').textContent += s + '\\n';
-    function doConnect() {
-        ws = new WebSocket('ws://localhost:8000/ws/default/browser-test');
-        ws.binaryType = 'arraybuffer';
-        ws.onopen = () => log('OPEN');
-        ws.onclose = e => log('CLOSE code=' + e.code + ' reason=' + e.reason + ' wasClean=' + e.wasClean);
-        ws.onerror = e => log('ERROR ' + JSON.stringify(e));
-        ws.onmessage = e => {
-            if (e.data instanceof ArrayBuffer) log('BINARY ' + e.data.byteLength + ' bytes');
-            else log('MSG: ' + e.data.substring(0, 100));
-        };
-    }
-    function doSend() {
-        if (!ws || ws.readyState !== 1) { log('Not connected'); return; }
-        ws.send(JSON.stringify({type: 'text', text: 'hello'}));
-        log('Sent hello');
-    }
-    </script>
-    </body></html>
-    """)
-
-
-# ─── Auto-continue: waits for silence, then prompts agent to keep going ───
-
-CONTINUE_PROMPTS = [
-    "Keep going — show me visuals, play connections on the graph, and find reviews. Don't stop until you've shown at least 3 different things.",
-    "Continue exploring — call another tool to show more. Dig deeper into the connections.",
-    "You're on a roll — keep the story going. Show me something I wouldn't expect.",
-]
-
-
-class TurnState:
-    """Track activity within a turn to enable auto-continue after silence."""
-
-    def __init__(self):
-        self.last_audio_time: float = 0
-        self.last_tool_time: float = 0
-        self.tools_called: list[str] = []
-        self.continues_sent: int = 0
-        self.max_continues: int = 3
-        self.active: bool = False  # True after user message, False after max continues
-
-    def on_audio(self):
-        self.last_audio_time = time.time()
-
-    def on_tool(self, name: str):
-        self.tools_called.append(name)
-        self.last_tool_time = time.time()
-
-    def on_user_message(self):
-        self.tools_called = []
-        self.continues_sent = 0
-        self.active = True
-        self.last_audio_time = time.time()
-        self.last_tool_time = 0
-
-    def should_continue(self) -> bool:
-        if not self.active:
-            return False
-        if self.continues_sent >= self.max_continues:
-            self.active = False
-            return False
-        # Need at least 1 tool or audio event to have happened
-        if not self.tools_called and self.last_audio_time == 0:
-            return False
-        # Wait for silence: 3s since last audio/tool activity
-        elapsed = time.time() - max(self.last_audio_time, self.last_tool_time)
-        return elapsed >= 3.0
-
-    def get_continue_prompt(self) -> str:
-        idx = min(self.continues_sent, len(CONTINUE_PROMPTS) - 1)
-        self.continues_sent += 1
-        return CONTINUE_PROMPTS[idx]
-
-
 @app.websocket("/ws/{user_id}/{session_id}")
 async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
     await ws.accept()
 
-    # Always create a fresh session to prevent context pollution
+    # Fresh session per connection
     fresh_id = f"{session_id}-{uuid.uuid4().hex[:8]}"
     session = await session_service.create_session(
         app_name=APP_NAME, user_id=user_id, session_id=fresh_id,
     )
     logger.info(f"[SESSION] New session: user={user_id} session={fresh_id}")
+
+    # Make WebSocket available to storyteller tool via module-level ref
+    storyteller.active_websocket = ws
 
     live_request_queue = LiveRequestQueue()
     runner = Runner(
@@ -162,18 +77,13 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
         response_modalities=["AUDIO"],
     )
 
-    turn_state = TurnState()
-
-    # Make WebSocket available to storyteller tool via context var
-    _active_ws.set(ws)
-
     async def upstream_task():
         """Receive from WebSocket, push to LiveRequestQueue."""
         try:
             while True:
                 try:
                     data = await ws.receive()
-                except WebSocketDisconnect:
+                except (WebSocketDisconnect, RuntimeError):
                     break
 
                 if "bytes" in data and data["bytes"]:
@@ -184,7 +94,6 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
                     msg = json.loads(data["text"])
 
                     if msg.get("type") == "text":
-                        turn_state.on_user_message()
                         content = Content(role="user", parts=[Part(text=msg["text"])])
                         live_request_queue.send_content(content)
                     elif msg.get("type") == "audio":
@@ -207,22 +116,6 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
         finally:
             live_request_queue.close()
 
-    async def auto_continue_task():
-        """Poll for silence and send continuation prompts."""
-        try:
-            while True:
-                await asyncio.sleep(1.0)
-                if turn_state.should_continue():
-                    prompt = turn_state.get_continue_prompt()
-                    logger.info(f"[AUTO-CONTINUE #{turn_state.continues_sent}] {prompt[:60]}...")
-                    live_request_queue.send_content(
-                        Content(role="user", parts=[Part(text=prompt)])
-                    )
-                    # Reset timers so we wait another 3s before next continue
-                    turn_state.last_audio_time = time.time()
-        except asyncio.CancelledError:
-            pass
-
     async def downstream_task():
         """run_live yields Events; serialize and send to WebSocket."""
         try:
@@ -231,9 +124,10 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
                 live_request_queue=live_request_queue,
                 run_config=run_config,
             ):
-                await _process_event(ws, event, turn_state)
+                await _process_event(ws, event)
         except Exception as e:
             error_msg = str(e)
+            logger.error(f"[DOWNSTREAM ERROR] {error_msg}")
             is_context_overflow = "context window" in error_msg or "32000" in error_msg
             try:
                 await ws.send_text(json.dumps({
@@ -245,19 +139,18 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
 
     upstream = asyncio.create_task(upstream_task())
     downstream = asyncio.create_task(downstream_task())
-    auto_cont = asyncio.create_task(auto_continue_task())
 
     try:
         await asyncio.gather(upstream, downstream)
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
         upstream.cancel()
         downstream.cancel()
-        auto_cont.cancel()
+        storyteller.active_websocket = None
 
 
-async def _process_event(ws: WebSocket, event, turn_state: TurnState):
+async def _process_event(ws: WebSocket, event):
     """Extract audio, transcripts, tool results from ADK Events and emit to frontend."""
     try:
         has_content = hasattr(event, "content") and event.content
@@ -267,7 +160,6 @@ async def _process_event(ws: WebSocket, event, turn_state: TurnState):
         if has_content and hasattr(event.content, "parts"):
             for part in (event.content.parts or []):
                 if hasattr(part, "inline_data") and part.inline_data and part.inline_data.data:
-                    turn_state.on_audio()
                     audio_b64 = base64.b64encode(part.inline_data.data).decode()
                     await ws.send_text(json.dumps({
                         "type": "audio",
@@ -290,16 +182,14 @@ async def _process_event(ws: WebSocket, event, turn_state: TurnState):
             tx = event.input_transcription
             text = getattr(tx, "text", None) or str(tx)
             if text and text.strip():
-                turn_state.on_user_message()
                 await ws.send_text(json.dumps({
                     "type": "transcript",
                     "role": "user",
                     "text": text,
                 }))
 
-        # Output transcription (agent speech-to-text)
+        # Output transcription (agent speech-to-text) — voice bar only, not story stream
         if hasattr(event, "output_transcription") and event.output_transcription:
-            turn_state.on_audio()
             tx = event.output_transcription
             text = getattr(tx, "text", None) or str(tx)
             if text and text.strip():
@@ -328,7 +218,6 @@ async def _process_event(ws: WebSocket, event, turn_state: TurnState):
             for tc in function_calls:
                 tool_name = getattr(tc, "name", None) or getattr(tc, "function_name", "unknown")
                 logger.info(f"[TOOL CALL] {tool_name}")
-                turn_state.on_tool(tool_name)
                 await ws.send_text(json.dumps({
                     "type": "agent_activity",
                     "tool": tool_name,
@@ -356,7 +245,6 @@ async def _emit_ui_event(ws: WebSocket, tool_result):
     """Translate tool results into frontend UI events."""
     try:
         name = getattr(tool_result, "name", "") or ""
-        # Handle both ADK tool_result and Gemini function_response formats
         raw_result = getattr(tool_result, "result", None) or getattr(tool_result, "response", {})
         if isinstance(raw_result, str):
             try:
@@ -366,7 +254,6 @@ async def _emit_ui_event(ws: WebSocket, tool_result):
         elif isinstance(raw_result, dict):
             result = raw_result
         else:
-            # Try converting proto-like objects to dict
             try:
                 result = dict(raw_result) if raw_result else {}
             except (TypeError, ValueError):
@@ -445,8 +332,7 @@ async def _emit_ui_event(ws: WebSocket, tool_result):
                     }))
 
         elif name == "tell_story":
-            # tell_story streams its own events directly via WebSocket
-            # Just log the summary
+            # tell_story streams directly via WebSocket — just log
             logger.info(f"[STORYTELLER] parts={result.get('parts_count')} text={result.get('text_segments')} images={result.get('image_segments')}")
 
         elif name == "create_playlist":
@@ -467,7 +353,7 @@ async def _emit_ui_event(ws: WebSocket, tool_result):
         pass
 
 
-# Backward-compatible /ws endpoint (no user/session in path)
+# Backward-compatible /ws endpoint
 @app.websocket("/ws")
 async def websocket_endpoint_compat(ws: WebSocket):
     await websocket_endpoint(ws, user_id="default", session_id="default")

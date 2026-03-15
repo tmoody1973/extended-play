@@ -7,7 +7,6 @@ streaming response. This is the Creative Storyteller hackathon capability.
 
 import asyncio
 import base64
-import contextvars
 import json
 import logging
 import os
@@ -18,8 +17,8 @@ from ..convex_client import query
 
 logger = logging.getLogger("extended_play")
 
-# Context var to pass the WebSocket into tool calls without changing ADK signatures
-_active_ws: contextvars.ContextVar = contextvars.ContextVar("active_ws", default=None)
+# Module-level ref set by main.py when a WebSocket connects
+active_websocket = None
 
 STORYTELLER_MODEL = "gemini-3.1-flash-image-preview"
 
@@ -80,7 +79,7 @@ async def tell_story(
     Returns:
         dict with status, parts (text and image segments), and summary.
     """
-    ws = _active_ws.get(None)
+    ws = active_websocket
     # Build context from our knowledge graph
     context_parts = []
 
