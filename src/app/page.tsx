@@ -11,6 +11,7 @@ import { InfluenceMap } from "@/components/graph/influence-map";
 import { ArtistDetailDrawer } from "@/components/graph/artist-detail-drawer";
 import { StoryStream } from "@/components/stream/story-stream";
 import { EpisodeWalkthrough } from "@/components/stream/episode-walkthrough";
+import { DirectorWalkthrough, type WalkthroughData } from "@/components/stream/director-walkthrough";
 import { PlaylistBar } from "@/components/playlist/playlist-bar";
 import { useAgentConnection, AgentEvent } from "@/hooks/use-agent-connection";
 // import { useAudioPlayer } from "@/contexts/audio-player-context";
@@ -32,28 +33,50 @@ export default function Home() {
     { startTimestamp: number; endTimestamp: number } | undefined
   >();
   const [activePlaylistId, setActivePlaylistId] = useState<Id<"playlists"> | undefined>();
+  const [walkthroughData, setWalkthroughData] = useState<WalkthroughData | null>(null);
+  const [walkthroughLoading, setWalkthroughLoading] = useState(false);
+  const [directorMode, setDirectorMode] = useState(false);
   const narrationBufferRef = useRef("");
-  const ttsQueueRef = useRef<string[]>([]);
-  const isSpeakingRef = useRef(false);
+  const audioQueueRef = useRef<ArrayBuffer[]>([]);
+  const isPlayingAudioRef = useRef(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
-  // TTS: speak narration text using Web Speech API
-  const speakText = useCallback((text: string) => {
-    ttsQueueRef.current.push(text);
-    if (isSpeakingRef.current) return; // already processing queue
+  // Play PCM audio from Gemini TTS (L16, 24kHz, mono)
+  const playPcmAudio = useCallback((base64Data: string) => {
+    const raw = atob(base64Data);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    audioQueueRef.current.push(bytes.buffer);
+    if (isPlayingAudioRef.current) return;
 
     const processQueue = () => {
-      if (ttsQueueRef.current.length === 0) {
-        isSpeakingRef.current = false;
+      if (audioQueueRef.current.length === 0) {
+        isPlayingAudioRef.current = false;
         return;
       }
-      isSpeakingRef.current = true;
-      const next = ttsQueueRef.current.shift()!;
-      const utterance = new SpeechSynthesisUtterance(next);
-      utterance.rate = 1.0;
-      utterance.pitch = 1.0;
-      utterance.onend = processQueue;
-      utterance.onerror = processQueue;
-      window.speechSynthesis.speak(utterance);
+      isPlayingAudioRef.current = true;
+      const buffer = audioQueueRef.current.shift()!;
+
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContext({ sampleRate: 24000 });
+      }
+      const ctx = audioContextRef.current;
+
+      // Convert L16 (16-bit signed PCM) to Float32
+      const int16 = new Int16Array(buffer);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 32768;
+      }
+
+      const audioBuffer = ctx.createBuffer(1, float32.length, 24000);
+      audioBuffer.getChannelData(0).set(float32);
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+      source.onended = processQueue;
+      source.start();
     };
     processQueue();
   }, []);
@@ -134,10 +157,14 @@ export default function Home() {
           ...prev.filter((item) => item.type !== "agent_activity"),
           event,
         ]);
-        // Speak it aloud via TTS
-        speakText(text.trim());
         break;
       }
+      case "narration_audio":
+        // Play Gemini TTS audio (PCM L16 24kHz)
+        if (event.audioData) {
+          playPcmAudio(event.audioData as string);
+        }
+        break;
       case "show_image":
         setStoryItems((prev) => [...prev.filter((item) => item.type !== "agent_activity"), event]);
         narrationBufferRef.current = "";
@@ -175,23 +202,37 @@ export default function Home() {
           setActivePlaylistId(event.playlistId as Id<"playlists">);
         }
         break;
+      case "walkthrough_loading":
+        setWalkthroughLoading(true);
+        break;
+      case "walkthrough_ready":
+        setWalkthroughLoading(false);
+        if (event.data) {
+          setWalkthroughData(event.data as WalkthroughData);
+          setDirectorMode(true);
+          setShowWelcome(false);
+        }
+        break;
       case "transcript":
         // Voice transcripts — just for the voice bar, not story stream
         break;
     }
-  }, [revealArtists, speakText]);
+  }, [revealArtists, playPcmAudio]);
 
   const agent = useAgentConnection({
     agentUrl: AGENT_WS_URL,
     onEvent: handleAgentEvent,
   });
 
-  // Stop TTS when user starts talking
+  // Stop audio when user starts talking
   useEffect(() => {
     if (agent.agentState === "listening") {
-      window.speechSynthesis?.cancel();
-      ttsQueueRef.current = [];
-      isSpeakingRef.current = false;
+      audioQueueRef.current = [];
+      isPlayingAudioRef.current = false;
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
     }
   }, [agent.agentState]);
 
@@ -213,11 +254,23 @@ export default function Home() {
   const handleEpisodeSelect = useCallback((id: Id<"episodes"> | undefined) => {
     setSelectedEpisodeId(id);
     setWalkthroughMode(!!id);
-  }, []);
+    // Trigger Director's Cut walkthrough via agent
+    if (id) {
+      setShowWelcome(false);
+      agent.sendWalkthrough(id);
+    }
+  }, [agent]);
 
   const handleCloseWalkthrough = useCallback(() => {
     setSelectedEpisodeId(undefined);
     setWalkthroughMode(false);
+    setDirectorMode(false);
+    setWalkthroughData(null);
+  }, []);
+
+  const handleDirectorComplete = useCallback(() => {
+    setDirectorMode(false);
+    // Keep episode selected so user can explore the tracklist
   }, []);
 
   const handleTellMeAbout = useCallback(() => {
@@ -299,13 +352,28 @@ export default function Home() {
           />
         }
         stream={
-          walkthroughMode && episodeWithTracks ? (
+          directorMode && walkthroughData ? (
+            <DirectorWalkthrough
+              data={walkthroughData}
+              onComplete={handleDirectorComplete}
+              playPcmAudio={playPcmAudio}
+              onArtistReveal={(artistId) => {
+                revealArtists(artistId);
+                setHighlightedNodeId(artistId);
+              }}
+            />
+          ) : walkthroughMode && episodeWithTracks ? (
             <EpisodeWalkthrough
               episode={episodeWithTracks}
               tracks={episodeWithTracks.tracks || []}
               onClose={handleCloseWalkthrough}
               onTellMeAbout={handleTellMeAbout}
             />
+          ) : walkthroughLoading ? (
+            <div className="flex flex-col items-center justify-center h-full gap-4">
+              <div className="w-8 h-8 border-2 border-gold/30 border-t-gold rounded-full animate-spin" />
+              <p className="text-sleeve text-sm font-editorial italic">Curating your episode...</p>
+            </div>
           ) : (
             <StoryStream items={storyItems} onSendText={(text) => {
               setShowWelcome(false);

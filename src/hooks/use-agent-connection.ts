@@ -181,6 +181,14 @@ export function useAgentConnection({
     onEvent({ type: "transcript", role: "user", text });
   }, [connect, onEvent]);
 
+  const sendWalkthrough = useCallback(async (episodeId: string) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      await connect();
+    }
+    wsRef.current?.send(JSON.stringify({ type: "walkthrough", episodeId }));
+    setAgentState("agent_thinking");
+  }, [connect]);
+
   const sendImage = useCallback(async (base64Data: string, mimeType: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       await connect();
@@ -213,6 +221,7 @@ export function useAgentConnection({
     stopRecording,
     sendText,
     sendImage,
+    sendWalkthrough,
     disconnect,
   };
 }

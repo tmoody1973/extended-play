@@ -1,4 +1,4 @@
-"""FastAPI server with ADK Runner/LiveRequestQueue for bidi-streaming."""
+"""FastAPI server — direct Gemini storytelling, no Live API."""
 
 import asyncio
 import json
@@ -6,7 +6,6 @@ import os
 import base64
 import logging
 import uuid
-from contextlib import asynccontextmanager
 
 logger = logging.getLogger("extended_play")
 logging.basicConfig(level=logging.INFO)
@@ -17,25 +16,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-from google.adk.agents.run_config import RunConfig, StreamingMode
-from google.adk.agents.live_request_queue import LiveRequestQueue
-from google.genai.types import Blob, Content, Part
-
-from extended_play.agent import root_agent
+from extended_play.tools.storyteller import tell_story, curate_episode
+from extended_play.tools.graph import explore_artist, get_connections, get_bridge_artists
+from extended_play.tools.reviews import search_reviews
+from extended_play.tools.episodes import list_episodes, get_episode
 from extended_play.tools import storyteller
 
-APP_NAME = "extended_play"
-session_service = InMemorySessionService()
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    yield
-
-
-app = FastAPI(title="Extended Play Agent", lifespan=lifespan)
+app = FastAPI(title="Extended Play Agent")
 
 app.add_middleware(
     CORSMiddleware,
@@ -54,303 +41,210 @@ async def health():
 @app.websocket("/ws/{user_id}/{session_id}")
 async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
     await ws.accept()
+    logger.info(f"[SESSION] Connected: user={user_id}")
 
-    # Fresh session per connection
-    fresh_id = f"{session_id}-{uuid.uuid4().hex[:8]}"
-    session = await session_service.create_session(
-        app_name=APP_NAME, user_id=user_id, session_id=fresh_id,
-    )
-    logger.info(f"[SESSION] New session: user={user_id} session={fresh_id}")
-
-    # Make WebSocket available to storyteller tool via module-level ref
+    # Give storyteller access to this WebSocket
     storyteller.active_websocket = ws
 
-    live_request_queue = LiveRequestQueue()
-    runner = Runner(
-        agent=root_agent,
-        app_name=APP_NAME,
-        session_service=session_service,
-    )
+    try:
+        while True:
+            try:
+                data = await ws.receive()
+            except (WebSocketDisconnect, RuntimeError):
+                break
 
-    run_config = RunConfig(
-        streaming_mode=StreamingMode.BIDI,
-        response_modalities=["AUDIO"],
-    )
+            if "text" in data and data["text"]:
+                msg = json.loads(data["text"])
 
-    async def upstream_task():
-        """Receive from WebSocket, push to LiveRequestQueue."""
-        try:
-            while True:
-                try:
-                    data = await ws.receive()
-                except (WebSocketDisconnect, RuntimeError):
+                if msg.get("type") == "walkthrough":
+                    episode_id = msg.get("episodeId")
+                    if episode_id:
+                        asyncio.create_task(_handle_walkthrough(ws, episode_id))
+
+                elif msg.get("type") == "text":
+                    text = msg["text"]
+                    logger.info(f"[USER] {text}")
+                    # Process in background so WebSocket stays responsive
+                    asyncio.create_task(_handle_message(ws, text))
+
+                elif msg.get("type") == "stop":
                     break
 
-                if "bytes" in data and data["bytes"]:
-                    live_request_queue.send_realtime(
-                        Blob(data=data["bytes"], mime_type="audio/pcm;rate=16000")
-                    )
-                elif "text" in data and data["text"]:
-                    msg = json.loads(data["text"])
-
-                    if msg.get("type") == "text":
-                        content = Content(role="user", parts=[Part(text=msg["text"])])
-                        live_request_queue.send_content(content)
-                    elif msg.get("type") == "audio":
-                        audio_bytes = base64.b64decode(msg["data"])
-                        live_request_queue.send_realtime(
-                            Blob(data=audio_bytes, mime_type="audio/pcm;rate=16000")
-                        )
-                    elif msg.get("type") == "image":
-                        image_bytes = base64.b64decode(msg["data"])
-                        content = Content(
-                            role="user",
-                            parts=[Part(inline_data=Blob(
-                                data=image_bytes,
-                                mime_type=msg.get("mimeType", "image/jpeg"),
-                            ))],
-                        )
-                        live_request_queue.send_content(content)
-                    elif msg.get("type") == "stop":
-                        break
-        finally:
-            live_request_queue.close()
-
-    async def downstream_task():
-        """run_live yields Events; serialize and send to WebSocket."""
-        try:
-            async for event in runner.run_live(
-                session=session,
-                live_request_queue=live_request_queue,
-                run_config=run_config,
-            ):
-                await _process_event(ws, event)
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"[DOWNSTREAM ERROR] {error_msg}")
-            is_context_overflow = "context window" in error_msg or "32000" in error_msg
-            try:
-                await ws.send_text(json.dumps({
-                    "type": "session_expired" if is_context_overflow else "error",
-                    "message": "Session full — reconnect to continue." if is_context_overflow else error_msg,
-                }))
-            except Exception:
-                pass
-
-    upstream = asyncio.create_task(upstream_task())
-    downstream = asyncio.create_task(downstream_task())
-
-    try:
-        await asyncio.gather(upstream, downstream)
-    except (WebSocketDisconnect, RuntimeError):
-        pass
     finally:
-        upstream.cancel()
-        downstream.cancel()
         storyteller.active_websocket = None
+        logger.info(f"[SESSION] Disconnected: user={user_id}")
 
 
-async def _process_event(ws: WebSocket, event):
-    """Extract audio, transcripts, tool results from ADK Events and emit to frontend."""
+async def _handle_message(ws: WebSocket, text: str):
+    """Route user message to the right handler and stream results."""
     try:
-        has_content = hasattr(event, "content") and event.content
-        has_actions = hasattr(event, "actions") and event.actions
+        lower = text.lower().strip()
 
-        # Audio and text content
-        if has_content and hasattr(event.content, "parts"):
-            for part in (event.content.parts or []):
-                if hasattr(part, "inline_data") and part.inline_data and part.inline_data.data:
-                    audio_b64 = base64.b64encode(part.inline_data.data).decode()
-                    await ws.send_text(json.dumps({
-                        "type": "audio",
-                        "data": audio_b64,
-                        "mimeType": getattr(part.inline_data, "mime_type", "audio/pcm"),
-                    }))
-                elif hasattr(part, "text") and part.text and part.text.strip():
-                    await ws.send_text(json.dumps({
-                        "type": "transcript",
-                        "role": "agent",
-                        "text": part.text,
-                    }))
-                    await ws.send_text(json.dumps({
-                        "type": "show_narration",
-                        "text": part.text,
-                    }))
-
-        # Input transcription (user speech-to-text)
-        if hasattr(event, "input_transcription") and event.input_transcription:
-            tx = event.input_transcription
-            text = getattr(tx, "text", None) or str(tx)
-            if text and text.strip():
-                await ws.send_text(json.dumps({
-                    "type": "transcript",
-                    "role": "user",
-                    "text": text,
-                }))
-
-        # Output transcription (agent speech-to-text) — voice bar only, not story stream
-        if hasattr(event, "output_transcription") and event.output_transcription:
-            tx = event.output_transcription
-            text = getattr(tx, "text", None) or str(tx)
-            if text and text.strip():
-                await ws.send_text(json.dumps({
-                    "type": "transcript",
-                    "role": "agent",
-                    "text": text,
-                }))
-
-        # Interruption
-        if hasattr(event, "interrupted") and event.interrupted:
-            await ws.send_text(json.dumps({"type": "interrupted"}))
-
-        # Tool call activity
-        function_calls = None
-        if hasattr(event, "tool_calls") and event.tool_calls:
-            function_calls = event.tool_calls
-        elif has_content and hasattr(event.content, "parts"):
-            for part in (event.content.parts or []):
-                if hasattr(part, "function_call") and part.function_call:
-                    if function_calls is None:
-                        function_calls = []
-                    function_calls.append(part.function_call)
-
-        if function_calls:
-            for tc in function_calls:
-                tool_name = getattr(tc, "name", None) or getattr(tc, "function_name", "unknown")
-                logger.info(f"[TOOL CALL] {tool_name}")
-                await ws.send_text(json.dumps({
-                    "type": "agent_activity",
-                    "tool": tool_name,
-                    "status": "running",
-                }))
-
-        # Tool results -> UI events
-        tool_results = []
-        if has_actions:
-            tool_results = getattr(event.actions, "tool_results", None) or []
-        if has_content and hasattr(event.content, "parts"):
-            for part in (event.content.parts or []):
-                if hasattr(part, "function_response") and part.function_response:
-                    tool_results.append(part.function_response)
-
-        for tr in tool_results:
-            logger.info(f"[TOOL RESULT] name={getattr(tr, 'name', '?')}")
-            await _emit_ui_event(ws, tr)
+        # Detect intent from user message
+        if any(w in lower for w in ["surprise", "unexpected", "wild", "random", "discover"]):
+            await _handle_surprise(ws)
+        elif any(w in lower for w in ["episode", "show", "walk me", "tracklist", "playlist"]):
+            await _handle_episode(ws, text)
+        else:
+            # Default: treat as artist/topic deep dive
+            await _handle_deep_dive(ws, text)
 
     except Exception as e:
-        logger.error(f"[EVENT ERROR] {e}", exc_info=True)
-
-
-async def _emit_ui_event(ws: WebSocket, tool_result):
-    """Translate tool results into frontend UI events."""
-    try:
-        name = getattr(tool_result, "name", "") or ""
-        raw_result = getattr(tool_result, "result", None) or getattr(tool_result, "response", {})
-        if isinstance(raw_result, str):
-            try:
-                result = json.loads(raw_result)
-            except (json.JSONDecodeError, TypeError):
-                return
-        elif isinstance(raw_result, dict):
-            result = raw_result
-        else:
-            try:
-                result = dict(raw_result) if raw_result else {}
-            except (TypeError, ValueError):
-                return
-
-        logger.info(f"[UI EVENT] tool={name} status={result.get('status')} keys={list(result.keys()) if isinstance(result, dict) else '?'}")
-
-        if not isinstance(result, dict) or result.get("status") != "success":
-            return
-
-        if name == "explore_artist":
-            artist = result.get("artist", {})
+        logger.error(f"[HANDLER ERROR] {e}", exc_info=True)
+        try:
             await ws.send_text(json.dumps({
-                "type": "show_artist",
-                "artistId": artist.get("_id"),
-                "data": artist,
+                "type": "error",
+                "message": str(e),
             }))
-            if artist.get("_id"):
-                await ws.send_text(json.dumps({
-                    "type": "highlight_node",
-                    "artistId": artist["_id"],
-                }))
+        except Exception:
+            pass
 
-        elif name == "get_connections":
-            subgraph = result.get("subgraph", {})
-            nodes = subgraph.get("nodes", [])
-            if nodes:
-                await ws.send_text(json.dumps({
-                    "type": "navigate_graph",
-                    "centerId": nodes[0].get("id"),
-                    "nodes": nodes,
-                    "edges": subgraph.get("edges", []),
-                }))
 
-        elif name == "get_episode":
-            episode = result.get("episode", {})
+async def _handle_surprise(ws: WebSocket):
+    """Surprise me flow: bridge artists → interleaved story → connections."""
+    logger.info("[FLOW] Surprise me")
+
+    await ws.send_text(json.dumps({
+        "type": "agent_activity",
+        "tool": "tell_story",
+        "status": "running",
+    }))
+
+    # tell_story streams show_narration + show_image directly via ws
+    result = await tell_story(topic="surprise me")
+    logger.info(f"[STORYTELLER] {result.get('status')} parts={result.get('parts_count')}")
+
+    # Follow up with connections for the first bridge artist
+    try:
+        bridges = await get_bridge_artists(limit=3)
+        bridge_list = bridges.get("bridge_artists", [])
+        if bridge_list:
+            first = bridge_list[0]
+            name = first.get("name", "")
+            if name:
+                conn = await get_connections(artist_name=name, depth=1)
+                subgraph = conn.get("subgraph", {})
+                nodes = subgraph.get("nodes", [])
+                if nodes:
+                    await ws.send_text(json.dumps({
+                        "type": "navigate_graph",
+                        "centerId": nodes[0].get("id"),
+                        "nodes": nodes,
+                        "edges": subgraph.get("edges", []),
+                    }))
+    except Exception as e:
+        logger.error(f"[CONNECTIONS ERROR] {e}")
+
+    # Search reviews
+    try:
+        reviews = await search_reviews(topic="surprising music connections bridge artists")
+        for review in (reviews.get("reviews", []) or [])[:2]:
+            await ws.send_text(json.dumps({
+                "type": "show_evidence",
+                "data": {
+                    "publication": review.get("publication", ""),
+                    "excerpt": review.get("excerpt", ""),
+                    "url": review.get("url"),
+                    "artistNames": review.get("artistNames", []),
+                },
+            }))
+    except Exception as e:
+        logger.error(f"[REVIEWS ERROR] {e}")
+
+
+async def _handle_deep_dive(ws: WebSocket, topic: str):
+    """Artist/topic deep dive: story → connections → reviews."""
+    logger.info(f"[FLOW] Deep dive: {topic}")
+
+    await ws.send_text(json.dumps({
+        "type": "agent_activity",
+        "tool": "tell_story",
+        "status": "running",
+    }))
+
+    # Interleaved story
+    result = await tell_story(topic=topic)
+    logger.info(f"[STORYTELLER] {result.get('status')} parts={result.get('parts_count')}")
+
+    # Try to get connections
+    try:
+        # Extract likely artist name (first few words or the whole topic)
+        conn = await get_connections(artist_name=topic, depth=1)
+        subgraph = conn.get("subgraph", {})
+        nodes = subgraph.get("nodes", [])
+        if nodes:
+            await ws.send_text(json.dumps({
+                "type": "navigate_graph",
+                "centerId": nodes[0].get("id"),
+                "nodes": nodes,
+                "edges": subgraph.get("edges", []),
+            }))
+    except Exception as e:
+        logger.error(f"[CONNECTIONS ERROR] {e}")
+
+    # Search reviews
+    try:
+        reviews = await search_reviews(topic=topic)
+        for review in (reviews.get("reviews", []) or [])[:3]:
+            await ws.send_text(json.dumps({
+                "type": "show_evidence",
+                "data": {
+                    "publication": review.get("publication", ""),
+                    "excerpt": review.get("excerpt", ""),
+                    "url": review.get("url"),
+                    "artistNames": review.get("artistNames", []),
+                },
+            }))
+    except Exception as e:
+        logger.error(f"[REVIEWS ERROR] {e}")
+
+
+async def _handle_episode(ws: WebSocket, text: str):
+    """Episode walkthrough: list episodes → story about standout artist."""
+    logger.info(f"[FLOW] Episode: {text}")
+
+    await ws.send_text(json.dumps({
+        "type": "agent_activity",
+        "tool": "get_episode",
+        "status": "running",
+    }))
+
+    # List episodes and pick one
+    try:
+        episodes = await list_episodes()
+        ep_list = episodes.get("episodes", [])
+        if ep_list:
+            ep = ep_list[0]  # Most recent
+            episode_data = await get_episode(episode_id=ep.get("_id") or ep.get("id"))
+            episode = episode_data.get("episode", {})
+
             await ws.send_text(json.dumps({
                 "type": "show_episode",
                 "episodeId": episode.get("_id"),
                 "data": episode,
             }))
 
-        elif name == "search_reviews":
-            reviews = result.get("reviews", [])
-            for review in (reviews[:3] if isinstance(reviews, list) else []):
-                await ws.send_text(json.dumps({
-                    "type": "show_evidence",
-                    "data": {
-                        "publication": review.get("publication", ""),
-                        "excerpt": review.get("excerpt", ""),
-                        "url": review.get("url"),
-                        "artistNames": review.get("artistNames", []),
-                    },
-                }))
+            # Tell a story about the episode's standout artist
+            tracks = episode.get("tracks", [])
+            if tracks:
+                artist_name = tracks[0].get("artistName", "")
+                if artist_name:
+                    result = await tell_story(topic=f"{artist_name} and their music")
+                    logger.info(f"[STORYTELLER] {result.get('status')}")
+    except Exception as e:
+        logger.error(f"[EPISODE ERROR] {e}", exc_info=True)
 
-        elif name == "generate_scene_image":
-            await ws.send_text(json.dumps({
-                "type": "show_image",
-                "imageData": result.get("imageData"),
-                "mimeType": result.get("mimeType"),
-                "caption": result.get("caption"),
-            }))
 
-        elif name == "get_bridge_artists":
-            bridges = result.get("bridge_artists", [])
-            for bridge in (bridges[:3] if isinstance(bridges, list) else []):
-                await ws.send_text(json.dumps({
-                    "type": "show_artist",
-                    "artistId": bridge.get("_id") or bridge.get("id"),
-                    "data": bridge,
-                }))
-                if bridge.get("_id") or bridge.get("id"):
-                    await ws.send_text(json.dumps({
-                        "type": "highlight_node",
-                        "artistId": bridge.get("_id") or bridge.get("id"),
-                    }))
-
-        elif name == "tell_story":
-            # tell_story streams directly via WebSocket — just log
-            logger.info(f"[STORYTELLER] parts={result.get('parts_count')} text={result.get('text_segments')} images={result.get('image_segments')}")
-
-        elif name == "create_playlist":
-            await ws.send_text(json.dumps({
-                "type": "create_playlist",
-                "playlistId": result.get("playlist_id") or result.get("playlistId"),
-                "title": result.get("title", "My Crate"),
-            }))
-
-        elif name == "add_to_playlist":
-            await ws.send_text(json.dumps({
-                "type": "add_to_playlist",
-                "trackId": result.get("track_id"),
-                "playlistId": result.get("playlist_id"),
-            }))
-
-    except Exception:
-        pass
+async def _handle_walkthrough(ws: WebSocket, episode_id: str):
+    """Director's Cut: cinematic episode walkthrough."""
+    logger.info(f"[FLOW] Walkthrough: {episode_id}")
+    await ws.send_text(json.dumps({
+        "type": "agent_activity",
+        "tool": "curate_episode",
+        "status": "running",
+    }))
+    result = await curate_episode(episode_id=episode_id)
+    logger.info(f"[CURATE] {result.get('status')} tracks={len(result.get('tracks', []))}")
 
 
 # Backward-compatible /ws endpoint
