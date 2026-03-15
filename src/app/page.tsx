@@ -13,7 +13,7 @@ import { StoryStream } from "@/components/stream/story-stream";
 import { EpisodeWalkthrough } from "@/components/stream/episode-walkthrough";
 import { PlaylistBar } from "@/components/playlist/playlist-bar";
 import { useAgentConnection, AgentEvent } from "@/hooks/use-agent-connection";
-import { useAudioPlayer } from "@/contexts/audio-player-context";
+// import { useAudioPlayer } from "@/contexts/audio-player-context";
 import { Id } from "../../convex/_generated/dataModel";
 
 const AGENT_WS_URL = process.env.NEXT_PUBLIC_AGENT_WS_URL || "ws://localhost:8000/ws";
@@ -186,15 +186,14 @@ export default function Home() {
     onEvent: handleAgentEvent,
   });
 
-  // Volume ducking — lower YouTube music when agent is speaking
-  const { duck, unduck } = useAudioPlayer();
+  // Stop TTS when user starts talking
   useEffect(() => {
-    if (agent.agentState === "agent_speaking") {
-      duck();
-    } else {
-      unduck();
+    if (agent.agentState === "listening") {
+      window.speechSynthesis?.cancel();
+      ttsQueueRef.current = [];
+      isSpeakingRef.current = false;
     }
-  }, [agent.agentState, duck, unduck]);
+  }, [agent.agentState]);
 
   const handleToggleRecording = () => {
     if (agent.isRecording) {

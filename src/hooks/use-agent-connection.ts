@@ -28,11 +28,8 @@ export function useAgentConnection({
   const [transcript, setTranscript] = useState<{ role: string; text: string } | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const playbackContextRef = useRef<AudioContext | null>(null);
-  const nextPlayTimeRef = useRef(0);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognitionRef = useRef<any>(null);
   const sessionIdRef = useRef(sessionId || crypto.randomUUID());
 
   const getWsUrl = useCallback(() => {
@@ -40,45 +37,7 @@ export function useAgentConnection({
     return `${base}/ws/${userId}/${sessionIdRef.current}`;
   }, [agentUrl, userId]);
 
-  const playAudioBytes = useCallback(async (bytes: Uint8Array) => {
-    if (!playbackContextRef.current) {
-      playbackContextRef.current = new AudioContext({ sampleRate: 24000 });
-      nextPlayTimeRef.current = 0;
-    }
-    const ctx = playbackContextRef.current;
-    const int16 = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
-    const float32 = new Float32Array(int16.length);
-    for (let i = 0; i < int16.length; i++) {
-      float32[i] = int16[i] / 0x8000;
-    }
-    const buffer = ctx.createBuffer(1, float32.length, 24000);
-    buffer.getChannelData(0).set(float32);
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(ctx.destination);
-    // Schedule chunks sequentially — each starts after the previous ends
-    const startTime = Math.max(ctx.currentTime, nextPlayTimeRef.current);
-    source.start(startTime);
-    nextPlayTimeRef.current = startTime + buffer.duration;
-  }, []);
-
-  const playAudioBase64 = useCallback(async (b64Data: string) => {
-    const binaryStr = atob(b64Data);
-    const bytes = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) {
-      bytes[i] = binaryStr.charCodeAt(i);
-    }
-    await playAudioBytes(bytes);
-  }, [playAudioBytes]);
-
-  const stopPlayback = useCallback(() => {
-    playbackContextRef.current?.close();
-    playbackContextRef.current = null;
-    nextPlayTimeRef.current = 0;
-  }, []);
-
   const connect = useCallback(async () => {
-    // Clean up any existing connection first
     if (wsRef.current) {
       if (wsRef.current.readyState === WebSocket.OPEN) return;
       wsRef.current.close();
@@ -87,38 +46,26 @@ export function useAgentConnection({
 
     const ws = new WebSocket(getWsUrl());
     wsRef.current = ws;
-    ws.binaryType = "arraybuffer";
 
-    // Attach ALL handlers BEFORE awaiting open to avoid missing early messages
     ws.onclose = () => {
       setIsConnected(false);
-      setIsRecording(false);
-      setAgentState("idle");
       wsRef.current = null;
     };
 
-    ws.onmessage = async (event) => {
-      if (event.data instanceof ArrayBuffer) {
-        setAgentState("agent_speaking");
-        await playAudioBytes(new Uint8Array(event.data));
-        return;
-      }
+    ws.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) return; // ignore raw audio
 
       const msg = JSON.parse(event.data);
       switch (msg.type) {
         case "audio":
-          setAgentState("agent_speaking");
-          await playAudioBase64(msg.data);
+          // Ignore — we use TTS now, not audio streaming
           break;
         case "transcript":
           if (!msg.text?.trim()) break;
           setTranscript({ role: msg.role, text: msg.text });
-          if (msg.role === "agent") setAgentState("agent_speaking");
           onEvent(msg);
           break;
         case "interrupted":
-          stopPlayback();
-          setAgentState("listening");
           onEvent(msg);
           break;
         case "agent_activity":
@@ -126,21 +73,22 @@ export function useAgentConnection({
           onEvent(msg);
           break;
         case "session_expired":
-          // Context window full — reconnect with fresh session
           wsRef.current?.close();
           wsRef.current = null;
           sessionIdRef.current = crypto.randomUUID();
           setIsConnected(false);
-          // Auto-reconnect after a brief pause
           setTimeout(() => { connect(); }, 300);
           break;
         default:
+          // show_narration, show_image, show_artist, etc.
+          if (msg.type === "show_narration") {
+            setAgentState("agent_speaking");
+          }
           onEvent(msg);
           break;
       }
     };
 
-    // Now wait for connection to open
     await new Promise<void>((resolve) => {
       ws.addEventListener("open", () => {
         setIsConnected(true);
@@ -148,69 +96,77 @@ export function useAgentConnection({
       }, { once: true });
       ws.addEventListener("error", () => {
         setTimeout(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            setIsConnected(true);
-            resolve();
-          } else {
-            setIsConnected(false);
-            resolve();
-          }
+          setIsConnected(ws.readyState === WebSocket.OPEN);
+          resolve();
         }, 500);
       }, { once: true });
     });
-  }, [getWsUrl, onEvent, playAudioBytes, playAudioBase64, stopPlayback]);
+  }, [getWsUrl, onEvent]);
 
+  // STT via Web Speech API
   const startRecording = useCallback(async () => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       await connect();
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
-    });
-    mediaStreamRef.current = stream;
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      console.warn("SpeechRecognition not supported");
+      return;
+    }
 
-    const audioContext = new AudioContext({ sampleRate: 16000 });
-    audioContextRef.current = audioContext;
-    const source = audioContext.createMediaStreamSource(stream);
-    const processor = audioContext.createScriptProcessor(512, 1, 1);
-    processorRef.current = processor;
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+    recognitionRef.current = recognition;
 
-    processor.onaudioprocess = (e) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-      const inputData = e.inputBuffer.getChannelData(0);
-      const pcm16 = new Int16Array(inputData.length);
-      for (let i = 0; i < inputData.length; i++) {
-        const s = Math.max(-1, Math.min(1, inputData[i]));
-        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-      }
-      // Prefer raw binary, fallback to base64
-      try {
-        wsRef.current.send(pcm16.buffer);
-      } catch {
-        const bytes = new Uint8Array(pcm16.buffer);
-        let binaryStr = "";
-        for (let j = 0; j < bytes.length; j++) {
-          binaryStr += String.fromCharCode(bytes[j]);
+    recognition.onresult = (event: any) => {
+      let finalText = "";
+      let interimText = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          finalText += result[0].transcript;
+        } else {
+          interimText += result[0].transcript;
         }
-        const b64 = btoa(binaryStr);
-        wsRef.current!.send(JSON.stringify({ type: "audio", data: b64 }));
+      }
+
+      // Show interim results in the voice bar
+      if (interimText) {
+        setTranscript({ role: "user", text: interimText });
+      }
+
+      // Send final transcription as text message
+      if (finalText.trim()) {
+        setTranscript({ role: "user", text: finalText.trim() });
+        onEvent({ type: "transcript", role: "user", text: finalText.trim() });
+        wsRef.current?.send(JSON.stringify({ type: "text", text: finalText.trim() }));
+        setAgentState("agent_thinking");
       }
     };
 
-    source.connect(processor);
-    processor.connect(audioContext.destination);
+    recognition.onerror = () => {
+      setIsRecording(false);
+      setAgentState("idle");
+    };
+
+    recognition.onend = () => {
+      // Restart if still in recording mode (browser stops after silence)
+      if (isRecording && recognitionRef.current) {
+        try { recognitionRef.current.start(); } catch { /* already started */ }
+      }
+    };
+
+    recognition.start();
     setIsRecording(true);
     setAgentState("listening");
-  }, [connect]);
+  }, [connect, onEvent, isRecording]);
 
   const stopRecording = useCallback(() => {
-    processorRef.current?.disconnect();
-    processorRef.current = null;
-    audioContextRef.current?.close();
-    audioContextRef.current = null;
-    mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
-    mediaStreamRef.current = null;
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
     setIsRecording(false);
     setAgentState("idle");
   }, []);
@@ -235,14 +191,13 @@ export function useAgentConnection({
 
   const disconnect = useCallback(() => {
     stopRecording();
-    stopPlayback();
     if (wsRef.current) {
       try { wsRef.current.send(JSON.stringify({ type: "stop" })); } catch {}
       wsRef.current.close();
       wsRef.current = null;
     }
     setIsConnected(false);
-  }, [stopRecording, stopPlayback]);
+  }, [stopRecording]);
 
   useEffect(() => {
     return () => disconnect();
