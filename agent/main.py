@@ -211,6 +211,11 @@ async def _process_event(ws: WebSocket, event):
                         "role": "agent",
                         "text": part.text,
                     }))
+                    # Also emit as narration card for the story stream
+                    await ws.send_text(json.dumps({
+                        "type": "show_narration",
+                        "text": part.text,
+                    }))
 
         # Input transcription (user speech-to-text)
         if hasattr(event, "input_transcription") and event.input_transcription:
@@ -231,6 +236,11 @@ async def _process_event(ws: WebSocket, event):
                 await ws.send_text(json.dumps({
                     "type": "transcript",
                     "role": "agent",
+                    "text": text,
+                }))
+                # Also emit as narration card so text appears in story stream
+                await ws.send_text(json.dumps({
+                    "type": "show_narration",
                     "text": text,
                 }))
 
@@ -354,6 +364,20 @@ async def _emit_ui_event(ws: WebSocket, tool_result):
                 "mimeType": result.get("mimeType"),
                 "caption": result.get("caption"),
             }))
+
+        elif name == "get_bridge_artists":
+            bridges = result.get("bridge_artists", [])
+            for bridge in (bridges[:3] if isinstance(bridges, list) else []):
+                await ws.send_text(json.dumps({
+                    "type": "show_artist",
+                    "artistId": bridge.get("_id") or bridge.get("id"),
+                    "data": bridge,
+                }))
+                if bridge.get("_id") or bridge.get("id"):
+                    await ws.send_text(json.dumps({
+                        "type": "highlight_node",
+                        "artistId": bridge.get("_id") or bridge.get("id"),
+                    }))
 
         elif name == "create_playlist":
             await ws.send_text(json.dumps({
