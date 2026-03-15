@@ -161,6 +161,7 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
     run_config = RunConfig(
         streaming_mode=StreamingMode.BIDI,
         response_modalities=["AUDIO"],
+        support_cfc=True,  # Compositional Function Calling — enables multi-tool chaining
     )
 
     turn_tracker = TurnTracker()
