@@ -257,7 +257,12 @@ export default function Home() {
     // Trigger Director's Cut walkthrough via agent
     if (id) {
       setShowWelcome(false);
+      setWalkthroughLoading(true);
       agent.sendWalkthrough(id);
+    } else {
+      setWalkthroughLoading(false);
+      setDirectorMode(false);
+      setWalkthroughData(null);
     }
   }, [agent]);
 
