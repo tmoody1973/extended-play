@@ -98,9 +98,12 @@ export default function Home() {
         setStoryItems((prev) => [...prev.filter((item) => item.type !== "agent_activity"), event]);
         setIsExploring(true);
         break;
-      case "show_narration":
+      case "show_narration": {
+        const text = (event.text as string) || "";
+        if (!text.trim()) break;
         setStoryItems((prev) => [...prev.filter((item) => item.type !== "agent_activity"), event]);
         break;
+      }
       case "show_image":
         setStoryItems((prev) => [...prev.filter((item) => item.type !== "agent_activity"), event]);
         break;

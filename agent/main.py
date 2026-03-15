@@ -5,7 +5,7 @@ import json
 import os
 import base64
 import logging
-import time
+import uuid
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger("extended_play")
@@ -21,7 +21,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.agents.run_config import RunConfig, StreamingMode
 from google.adk.agents.live_request_queue import LiveRequestQueue
-from google.genai.types import Content, Part, Blob
+from google.genai.types import Blob, Content, Part
 
 from extended_play.agent import root_agent
 
@@ -84,72 +84,16 @@ async def ws_test_page():
     """)
 
 
-# ─── Tool orchestration: track tool calls per turn and nudge agent ───
-
-TOOL_SEQUENCE = {
-    "surprise": ["get_bridge_artists", "explore_artist", "generate_scene_image", "get_connections", "search_reviews"],
-    "episode": ["get_episode", "explore_artist", "get_connections"],
-    "deep_dive": ["explore_artist", "generate_scene_image", "get_connections", "search_reviews"],
-    "default": ["explore_artist", "generate_scene_image", "search_reviews"],
-}
-
-NUDGE_TEMPLATES = {
-    "explore_artist": "Good — now call get_connections to show how this artist connects to others on the graph. Then call search_reviews for journalistic evidence.",
-    "get_bridge_artists": "Great bridge artists! Now pick the most surprising one and call explore_artist to show their card. Then call generate_scene_image for a visual.",
-    "generate_scene_image": "Beautiful image. Now call search_reviews to ground your narrative in real journalism. Then call get_connections to show the graph.",
-    "get_connections": "The graph is revealed. Now call search_reviews for critical evidence about these connections.",
-    "search_reviews": "You have evidence now. Narrate a compelling summary of what you found and ask the listener what they want to explore next.",
-    "get_episode": "Episode loaded! Now walk through 3-4 standout tracks — call explore_artist for each one. Show the connections between artists in this episode.",
-}
-
-
-class TurnTracker:
-    """Track tool calls within a conversational turn to enable nudging."""
-
-    def __init__(self):
-        self.tools_called: list[str] = []
-        self.last_tool_time: float = 0
-        self.nudge_count: int = 0
-        self.max_nudges: int = 3  # prevent infinite nudge loops
-
-    def record_tool(self, name: str):
-        self.tools_called.append(name)
-        self.last_tool_time = time.time()
-
-    def reset(self):
-        self.tools_called = []
-        self.nudge_count = 0
-
-    def should_nudge(self) -> bool:
-        """Check if we should nudge the agent to call more tools."""
-        if self.nudge_count >= self.max_nudges:
-            return False
-        if len(self.tools_called) == 0:
-            return False
-        # If agent has called fewer than 2 tools, nudge
-        return len(self.tools_called) < 3
-
-    def get_nudge_message(self) -> str | None:
-        """Get a contextual nudge based on what tool was just called."""
-        if not self.tools_called:
-            return None
-        last_tool = self.tools_called[-1]
-        self.nudge_count += 1
-        return NUDGE_TEMPLATES.get(last_tool)
-
-
 @app.websocket("/ws/{user_id}/{session_id}")
 async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
     await ws.accept()
 
-    # Create or resume session
-    session = await session_service.get_session(
-        app_name=APP_NAME, user_id=user_id, session_id=session_id,
+    # Always create a fresh session to prevent context pollution
+    fresh_id = f"{session_id}-{uuid.uuid4().hex[:8]}"
+    session = await session_service.create_session(
+        app_name=APP_NAME, user_id=user_id, session_id=fresh_id,
     )
-    if session is None:
-        session = await session_service.create_session(
-            app_name=APP_NAME, user_id=user_id, session_id=session_id,
-        )
+    logger.info(f"[SESSION] New session: user={user_id} session={fresh_id}")
 
     live_request_queue = LiveRequestQueue()
     runner = Runner(
@@ -163,8 +107,6 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
         response_modalities=["AUDIO"],
     )
 
-    turn_tracker = TurnTracker()
-
     async def upstream_task():
         """Receive from WebSocket, push to LiveRequestQueue."""
         try:
@@ -175,7 +117,6 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
                     break
 
                 if "bytes" in data and data["bytes"]:
-                    # Raw PCM audio bytes from browser — wrap in Blob for ADK
                     live_request_queue.send_realtime(
                         Blob(data=data["bytes"], mime_type="audio/pcm;rate=16000")
                     )
@@ -183,18 +124,14 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
                     msg = json.loads(data["text"])
 
                     if msg.get("type") == "text":
-                        # New user turn — reset tracker
-                        turn_tracker.reset()
                         content = Content(role="user", parts=[Part(text=msg["text"])])
                         live_request_queue.send_content(content)
                     elif msg.get("type") == "audio":
-                        # Base64-encoded audio fallback
                         audio_bytes = base64.b64decode(msg["data"])
                         live_request_queue.send_realtime(
                             Blob(data=audio_bytes, mime_type="audio/pcm;rate=16000")
                         )
                     elif msg.get("type") == "image":
-                        # Vision input
                         image_bytes = base64.b64decode(msg["data"])
                         content = Content(
                             role="user",
@@ -217,7 +154,7 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
                 live_request_queue=live_request_queue,
                 run_config=run_config,
             ):
-                await _process_event(ws, event, turn_tracker, live_request_queue)
+                await _process_event(ws, event)
         except Exception as e:
             error_msg = str(e)
             is_context_overflow = "context window" in error_msg or "32000" in error_msg
@@ -241,17 +178,11 @@ async def websocket_endpoint(ws: WebSocket, user_id: str, session_id: str):
         downstream.cancel()
 
 
-async def _process_event(ws: WebSocket, event, turn_tracker: TurnTracker, live_queue: LiveRequestQueue):
+async def _process_event(ws: WebSocket, event):
     """Extract audio, transcripts, tool results from ADK Events and emit to frontend."""
     try:
         has_content = hasattr(event, "content") and event.content
         has_actions = hasattr(event, "actions") and event.actions
-
-        if has_actions or (hasattr(event, "tool_calls") and event.tool_calls):
-            event_attrs = [a for a in dir(event) if not a.startswith("_")]
-            logger.info(f"[EVENT] attrs={event_attrs}")
-            if has_actions:
-                logger.info(f"[EVENT] actions={event.actions}")
 
         # Audio and text content
         if has_content and hasattr(event.content, "parts"):
@@ -263,13 +194,12 @@ async def _process_event(ws: WebSocket, event, turn_tracker: TurnTracker, live_q
                         "data": audio_b64,
                         "mimeType": getattr(part.inline_data, "mime_type", "audio/pcm"),
                     }))
-                elif hasattr(part, "text") and part.text:
+                elif hasattr(part, "text") and part.text and part.text.strip():
                     await ws.send_text(json.dumps({
                         "type": "transcript",
                         "role": "agent",
                         "text": part.text,
                     }))
-                    # Also emit as narration card for the story stream
                     await ws.send_text(json.dumps({
                         "type": "show_narration",
                         "text": part.text,
@@ -279,9 +209,7 @@ async def _process_event(ws: WebSocket, event, turn_tracker: TurnTracker, live_q
         if hasattr(event, "input_transcription") and event.input_transcription:
             tx = event.input_transcription
             text = getattr(tx, "text", None) or str(tx)
-            if text:
-                # New voice turn — reset tracker
-                turn_tracker.reset()
+            if text and text.strip():
                 await ws.send_text(json.dumps({
                     "type": "transcript",
                     "role": "user",
@@ -292,13 +220,12 @@ async def _process_event(ws: WebSocket, event, turn_tracker: TurnTracker, live_q
         if hasattr(event, "output_transcription") and event.output_transcription:
             tx = event.output_transcription
             text = getattr(tx, "text", None) or str(tx)
-            if text:
+            if text and text.strip():
                 await ws.send_text(json.dumps({
                     "type": "transcript",
                     "role": "agent",
                     "text": text,
                 }))
-                # Also emit as narration card so text appears in story stream
                 await ws.send_text(json.dumps({
                     "type": "show_narration",
                     "text": text,
@@ -307,9 +234,8 @@ async def _process_event(ws: WebSocket, event, turn_tracker: TurnTracker, live_q
         # Interruption
         if hasattr(event, "interrupted") and event.interrupted:
             await ws.send_text(json.dumps({"type": "interrupted"}))
-            turn_tracker.reset()
 
-        # Tool call activity — check multiple possible attribute names
+        # Tool call activity
         function_calls = None
         if hasattr(event, "tool_calls") and event.tool_calls:
             function_calls = event.tool_calls
@@ -324,18 +250,16 @@ async def _process_event(ws: WebSocket, event, turn_tracker: TurnTracker, live_q
             for tc in function_calls:
                 tool_name = getattr(tc, "name", None) or getattr(tc, "function_name", "unknown")
                 logger.info(f"[TOOL CALL] {tool_name}")
-                turn_tracker.record_tool(tool_name)
                 await ws.send_text(json.dumps({
                     "type": "agent_activity",
                     "tool": tool_name,
                     "status": "running",
                 }))
 
-        # Tool results -> UI events — check multiple possible locations
+        # Tool results -> UI events
         tool_results = []
         if has_actions:
             tool_results = getattr(event.actions, "tool_results", None) or []
-        # Also check content parts for function_response
         if has_content and hasattr(event.content, "parts"):
             for part in (event.content.parts or []):
                 if hasattr(part, "function_response") and part.function_response:
@@ -344,19 +268,6 @@ async def _process_event(ws: WebSocket, event, turn_tracker: TurnTracker, live_q
         for tr in tool_results:
             logger.info(f"[TOOL RESULT] name={getattr(tr, 'name', '?')}")
             await _emit_ui_event(ws, tr)
-
-        # ─── Nudge: after tool results, if agent hasn't called enough tools, prompt it ───
-        if tool_results and turn_tracker.should_nudge():
-            nudge = turn_tracker.get_nudge_message()
-            if nudge:
-                logger.info(f"[NUDGE] Sending nudge after {len(turn_tracker.tools_called)} tools: {nudge[:60]}...")
-                # Small delay to let the model finish its current audio chunk
-                await asyncio.sleep(0.5)
-                nudge_content = Content(
-                    role="user",
-                    parts=[Part(text=f"[SYSTEM: Continue the Director's Playbook] {nudge}")]
-                )
-                live_queue.send_content(nudge_content)
 
     except Exception as e:
         logger.error(f"[EVENT ERROR] {e}", exc_info=True)

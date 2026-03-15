@@ -111,6 +111,7 @@ export function useAgentConnection({
           await playAudioBase64(msg.data);
           break;
         case "transcript":
+          if (!msg.text?.trim()) break;
           setTranscript({ role: msg.role, text: msg.text });
           if (msg.role === "agent") setAgentState("agent_speaking");
           onEvent(msg);
